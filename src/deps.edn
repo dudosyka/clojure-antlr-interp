@@ -1,0 +1,2 @@
+{:deps {grammar/grammar {:local/root "./src/grammar/Grammar.jar"}
+        antlr/antlr {:local/root "./src/grammar/antlr.jar"}}}
