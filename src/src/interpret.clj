@@ -13,6 +13,9 @@
                   (new CommonTokenStream)
                   (new GrammarParser)
                   (.prog))]
+    (println "Выполнение: " input-file)
     (visitor/visit tree)))
 
-(-main ["/Users/dudosyka/IdeaProjects/compilers/test.clj"])
+(-main ["/Users/dudosyka/IdeaProjects/compilers/src/src/examples/fib.clj"])
+(-main ["/Users/dudosyka/IdeaProjects/compilers/src/src/examples/loop.clj"])
+(-main ["/Users/dudosyka/IdeaProjects/compilers/src/src/examples/data_types.clj"])

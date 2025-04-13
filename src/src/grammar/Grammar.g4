@@ -10,7 +10,7 @@ item:   INT     # int
     |   ID      # id
     ;
 
-list:   '(' symbol=(RECUR|PRINT|ADD|ADDSTR|SUB|MUL|DIV|EQ|AND|OR|NOT|GR|GREQ|LESS|LESSEQ|ID) expr+ ')'
+list:   '(' symbol=(RECUR|PRINT|ADD|ADDSTR|SUB|MUL|DIV|EQ|AND|OR|NOT|GR|GREQ|LESS|LESSEQ|ID) expr (NEWLINE? expr)* ')'
     ;
 
 binding: ID (item|list);

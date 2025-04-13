@@ -317,7 +317,10 @@
                        parse-long
                        (update-value _))))
   (visitStr [_ node]
-    (VisitorImpl. (->> node .getText (update-value _)))))
+    (let [str (->> node .getText)]
+      (->> (-> str (subs 1 (-> str count dec))) (update-value _) VisitorImpl.)))
+  (visitBool [_ node]
+   (->> node .getText (= "true") (update-value _) VisitorImpl.)))
 
 (defn visit [^ParseTree tree]
   (let [v (VisitorImpl. (->Context nil {} nil [] {}))]
