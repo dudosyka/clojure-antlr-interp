@@ -1,10 +1,6 @@
-(defn test [a] a)
+(defn fib [n]
+      (if (or (= n 1) (= n 2))
+          1
+          (+ (fib (- n 1)) (fib (- n 2)))))
 
-(print (test 123))
-
-(defn second [a]
-      (if (< a 3)
-          (second 3)
-          (test 3)))
-
-(print (second 2))
+(print (fib 10))

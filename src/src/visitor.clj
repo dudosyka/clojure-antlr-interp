@@ -1,5 +1,5 @@
 (ns visitor
-  (:import (com.grammar GrammarBaseVisitor GrammarParser GrammarVisitor)
+  (:import (com.grammar GrammarParser GrammarVisitor)
            (org.antlr.runtime.tree ParseTree)))
 
 
@@ -152,6 +152,12 @@
       (assoc :scope scope)))
 
 
+(defn and-fun [x & next]
+  (reduce #(and %1 %2) x next))
+
+(defn or-fun [x & next]
+  (reduce #(or %1 %2) x next))
+
 (deftype VisitorImpl [context]
   GrammarVisitor
   (visit [_ ctx]
@@ -183,8 +189,8 @@
                                        :gr-eq (apply >= items)
                                        :less (apply < items)
                                        :less-eq (apply <= items)
-                                       ;:and (apply and items)
-                                       ;:or (apply or items)
+                                       :and (apply and-fun items)
+                                       :or (apply or-fun items)
                                        :not (apply not items)
                                        :print (apply println items)
                                        :add-str (apply str items)
@@ -202,14 +208,15 @@
                                        :id (let [scope (get-cur-scope _)
                                                  name (-> node .-symbol .getText)
                                                  [old-vars invoke-ctx block] (invoke ctx name items)]
-                                             ;(println "INVOKE FUNCTION" name)
-                                             ;(clojure.pprint/pprint old-vars)
-                                             ;(clojure.pprint/pprint invoke-ctx)
-                                             (-> invoke-ctx VisitorImpl.
-                                                 (.visit block)
-                                                 (end-function-call old-vars scope)
-                                                 VisitorImpl.
-                                                 get-value)))))))
+                                             (if (nil? block)
+                                               nil
+                                               (-> invoke-ctx VisitorImpl.
+                                                   (.visit block)
+                                                   (end-function-call old-vars scope)
+                                                   VisitorImpl.
+                                                   get-value))))))))
+
+
 
 
 
@@ -275,8 +282,6 @@
           ctx (-> _
                   (def-fun name bindings block)
                   VisitorImpl.)]
-      ;(println "DEF FUN")
-      ;(clojure.pprint/pprint (-> ctx get-ctx))
       ctx))
 
 
@@ -304,8 +309,8 @@
     (.visit _ (.getChild node 0)))
   (visitProg [_ ctx]
     (.visitChildren _ ctx))
-  (visitTerminal [_ node] _)
-  (visitErrorNode [_ node] _)
+  (visitTerminal [ctx _] ctx)
+  (visitErrorNode [ctx _] ctx)
   (visitInt [_ node]
     (VisitorImpl. (->> node
                        .getText
