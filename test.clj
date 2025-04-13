@@ -1,5 +1,10 @@
-(print (loop [i 0]
-             (let [b (* i 2)]
-                  (if (< b 3)
-                    (recur (+ i 1))
-                    i))))
+(defn test [a] a)
+
+(print (test 123))
+
+(defn second [a]
+      (if (< a 3)
+          (second 3)
+          (test 3)))
+
+(print (second 2))

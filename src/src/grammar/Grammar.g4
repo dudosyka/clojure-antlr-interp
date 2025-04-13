@@ -1,6 +1,8 @@
 grammar Grammar;
 
-prog:   expr*;
+prog:   (expr|defn)*
+    ;
+
 
 item:   INT     # int
     |   STR     # str
@@ -8,7 +10,7 @@ item:   INT     # int
     |   ID      # id
     ;
 
-list:   '(' symbol=(RECUR|PRINT|ADD|ADDSTR|SUB|MUL|DIV|EQ|AND|OR|NOT|GR|GREQ|LESS|LESSEQ) expr+ ')'
+list:   '(' symbol=(RECUR|PRINT|ADD|ADDSTR|SUB|MUL|DIV|EQ|AND|OR|NOT|GR|GREQ|LESS|LESSEQ|ID) expr+ ')'
     ;
 
 binding: ID (item|list);
@@ -24,15 +26,14 @@ loop: '(' LOOP '[' bindings ']' NEWLINE? block ')'
 if: '(' IF cond=expr NEWLINE? if_branch=expr NEWLINE? else_branch=expr ')'
   ;
 
-//defn: '(' DEFN '[' ID* ']' NEWLINE? expr ')'
-//    ;
+defn: '(' DEFN ID '[' ID* ']' NEWLINE? block ')'
+    ;
 
 expr:   list
     |   let
     |   loop
     |   if
     |   item
-//    |   defn
     |   NEWLINE
     ;
 
@@ -136,12 +137,6 @@ BOOL:   'true'|'false';
 STR :   '"' (~'"' | '\\' '"')* '"' ;
 
 
-LPAREN : '(' ;
-RPAREN : ')' ;
-LBRACE : '{' ;
-RBRACE : '}' ;
-LSBRACE: '[' ;
-RSBRACE: ']' ;
-ID  :   [a-zA-Z]+ ;
+ID  :   [a-zA-Z_-]+ ;
 NEWLINE:'\r'? '\n' ;
 WS  :   [ \t]+ -> skip ;

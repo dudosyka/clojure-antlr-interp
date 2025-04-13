@@ -4,7 +4,8 @@
 
 
 (defrecord Var [name scope value n])
-(defrecord Context [value vars scope recur-queue])
+(defrecord Fun [name bindings block])
+(defrecord Context [value vars scope recur-queue user-defs])
 
 (defn get-ctx [visitor]
   (-> visitor .-context))
@@ -23,13 +24,14 @@
                     GrammarParser/NOT    :not
                     GrammarParser/PRINT  :print
                     GrammarParser/RECUR  :recur
-                    GrammarParser/ADDSTR :add-str})
+                    GrammarParser/ADDSTR :add-str
+                    GrammarParser/ID     :id})
 
 (defn get-symbol [ctx]
   (->> ctx
-      .symbol
-      .getType
-      (get symbol-mapper)))
+       .symbol
+       .getType
+       (get symbol-mapper)))
 
 (defn update-value [visitor value]
   (let [ctx (-> visitor .-context)]
@@ -123,6 +125,33 @@
                 (assoc :scope old))]
     ctx))
 
+(defn def-fun [visitor name bindings block]
+  (let [ctx (get-ctx visitor)]
+    (-> ctx
+        (assoc :user-defs
+               (-> ctx :user-defs
+                   (assoc name (->Fun name bindings block)))))))
+
+(defn invoke [visitor name items]
+  (let [scope (create-scope visitor name)
+        ctx (get-ctx visitor)
+        vars (:vars ctx)
+        fun (-> ctx :user-defs (get name))
+        new-vars (->> fun :bindings
+                     (reduce (fn [[i vars] [k v]] ; k, v -> binding pair
+                               [(inc i) (assoc vars k (->Var k scope (nth items i) v))]) [0 {}])
+                     second)]
+    [vars (-> ctx
+              (assoc :vars new-vars)
+              (assoc :scope scope)) (:block fun)]))
+
+(defn end-function-call [visitor vars scope]
+  (-> visitor
+      get-ctx
+      (assoc :vars vars)
+      (assoc :scope scope)))
+
+
 (deftype VisitorImpl [context]
   GrammarVisitor
   (visit [_ ctx]
@@ -168,7 +197,21 @@
                                                                                      VisitorImpl.)])) [0 ctx] items)]
                                                 (-> ctx
                                                     (.visit block)
-                                                    (get-value))))))))
+                                                    (get-value)))
+
+                                       :id (let [scope (get-cur-scope _)
+                                                 name (-> node .-symbol .getText)
+                                                 [old-vars invoke-ctx block] (invoke ctx name items)]
+                                             ;(println "INVOKE FUNCTION" name)
+                                             ;(clojure.pprint/pprint old-vars)
+                                             ;(clojure.pprint/pprint invoke-ctx)
+                                             (-> invoke-ctx VisitorImpl.
+                                                 (.visit block)
+                                                 (end-function-call old-vars scope)
+                                                 VisitorImpl.
+                                                 get-value)))))))
+
+
 
 
 
@@ -220,6 +263,22 @@
           VisitorImpl.
           (drop-recur-scope)
           VisitorImpl.)))
+  (visitDefn [_ node]
+    (let [name (-> node .ID .getFirst .getText)
+          bindings (->> node
+                        .ID
+                        (drop 1)
+                        (reduce (fn [[i bindings] id]
+                                  [(inc i) (into bindings {(.getText id) i})]) [0 {}])
+                        (second))
+          block (-> node .block)
+          ctx (-> _
+                  (def-fun name bindings block)
+                  VisitorImpl.)]
+      ;(println "DEF FUN")
+      ;(clojure.pprint/pprint (-> ctx get-ctx))
+      ctx))
+
 
   (visitBlock [_ node]
     (reduce (fn [visitor ctx] (.visit visitor ctx)) _ (.expr node)))
@@ -256,5 +315,5 @@
     (VisitorImpl. (->> node .getText (update-value _)))))
 
 (defn visit [^ParseTree tree]
-  (let [v (VisitorImpl. (->Context nil {} nil []))]
+  (let [v (VisitorImpl. (->Context nil {} nil [] {}))]
     (.visit v tree)))
