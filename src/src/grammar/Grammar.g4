@@ -10,7 +10,10 @@ item:   INT     # int
     |   ID      # id
     ;
 
-list:   '(' symbol=(RECUR|PRINT|ADD|ADDSTR|SUB|MUL|DIV|EQ|AND|OR|NOT|GR|GREQ|LESS|LESSEQ|ID) expr (NEWLINE? expr)* ')'
+list:   '(' symbol=(RECUR|PRINT|ADD|ADDSTR|SUB|MUL|DIV|EQ|AND|OR|GR|GREQ|LESS|LESSEQ|ID) expr (NEWLINE? expr)* ')'
+    ;
+
+not_list: '(' NOT expr ')'
     ;
 
 binding: ID (item|list);
@@ -30,6 +33,7 @@ defn: '(' DEFN ID '[' ID* ']' NEWLINE? block ')'
     ;
 
 expr:   list
+    |   not_list
     |   let
     |   loop
     |   if
