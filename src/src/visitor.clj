@@ -216,12 +216,6 @@
                                                    VisitorImpl.
                                                    get-value))))))))
 
-
-
-
-
-
-
   (visitBinding [_ node]
     (let [scope (get-cur-scope _)
           n (get-value _)

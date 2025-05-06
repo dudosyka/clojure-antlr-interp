@@ -16,7 +16,7 @@ list:   '(' symbol=(RECUR|PRINT|ADD|ADDSTR|SUB|MUL|DIV|EQ|AND|OR|GR|GREQ|LESS|LE
 not_list: '(' NOT expr ')'
     ;
 
-binding: ID (item|list);
+binding: ID (expr);
 
 bindings: binding (NEWLINE binding)*;
 
@@ -38,6 +38,9 @@ expr:   list
     |   loop
     |   if
     |   item
+    ;
+
+line:   expr
     |   NEWLINE
     ;
 

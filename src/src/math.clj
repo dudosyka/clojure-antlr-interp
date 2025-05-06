@@ -1,23 +1,20 @@
 (ns math)
 
-(defn is-int? [item]
+(defn- is-int? [item]
   (-> item :type (= :int)))
 
-(defn is-var? [item]
+(defn- is-var? [item]
   (-> item :type (= :var)))
-
-(defn is-str? [item]
-  (-> item :type (= :str)))
 
 (defrecord Simplified [lead simplified ns vars])
 (defrecord ListItem [type value])
 
-(defn build-simplified [[lead simplified ns vars] f default]
+(defn- build-simplified [[lead simplified ns vars] f default]
   (if (and (is-int? lead) (empty? ns) (empty? vars))
     (->Simplified (->ListItem :int (f (:value lead) simplified)) default ns vars)
     (->Simplified lead simplified ns vars)))
 
-(defn simplify [arr f s var-map]
+(defn- simplify [arr f s var-map]
   (let [num (first arr)
         den (subvec arr 1 (count arr))
         [not-simplified simplified variables] (loop [den den
@@ -40,7 +37,7 @@
                                                   [not-simplified simplified variables]))]
     [num simplified not-simplified variables]))
 
-(defn simplify-first [num not-simplified with]
+(defn- simplify-first [num not-simplified with]
   (let [ns (loop [items not-simplified
                   result []]
              (if (empty? items)
@@ -73,17 +70,3 @@
   (-> arr
       (simplify * 1 var-map)
       (build-simplified * 1)))
-
-;(defn simplify-str-sum [arr]
-;  (loop [arr arr
-;         res '()
-;         prev-reduced false]
-;    (if (empty? arr)
-;      (reverse res)
-;      (let [cur (if prev-reduced (first res) "")
-;            item (first arr)]
-;        (println res cur (last res))
-;        (if (is-str? item)
-;          (let [res (if prev-reduced (drop 1 res) res)]
-;            (recur (drop 1 arr) (conj res (str cur (:value item))) true))
-;          (recur (drop 1 arr) (conj res (:value item)) false))))))

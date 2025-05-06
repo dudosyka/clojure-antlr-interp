@@ -15,10 +15,10 @@
                   (new CommonTokenStream)
                   (new GrammarParser)
                   (.prog))]
-    (println "Выполнение: " input-file)
+    ;(println "Выполнение: " input-file)
     ;(visitor/visit tree)
-    (let [visitor (visitor-project/visit tree)
-          asm (->> visitor .-context :op (str/join "\n"))]
+    (let [ctx (visitor-project/visit tree)
+          asm (->> ctx :op (str/join "\n"))]
       (println asm))))
 
 (-main ["/Users/dudosyka/IdeaProjects/compilers/src/src/examples/list.clj"])

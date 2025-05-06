@@ -1,23 +1,31 @@
 (ns visitor-project
-  (:require [math]
+  (:require [clojure.string :as str]
+            [math]
             [op]
-            [logic])
-  (:import (com.grammar GrammarParser GrammarVisitor)
+            [logic]
+            [asm]
+            [asm :refer [x0 x1 x2 x20 x21 x22 x31]])
+  (:import (com.grammar GrammarParser GrammarParser$BindingContext GrammarVisitor)
            (org.antlr.runtime.tree ParseTree)))
 
-(def zero-reg "x0")
-(def nested-res-reg "x22")
-(def acc-reg "x20")
-(def last-addr 65535)
+(def zero-reg x0)
+(def nested-res-reg x22)
+(def acc-reg x20)
+(def memory-size 65535)
+(def str-op-buffer 1000)
 (def max-stack 1000)
 (def ascii 128)
 (def ascii-num-char-start 48)
 (def min-op-reg 5)
 
-(defrecord VarStackEntry [value addr])
+
+
+(defrecord VarStackEntry [type value])
 (defrecord Var [name stack])
 (defrecord ListItem [type value])
-(defrecord Context [value next-reg next-cell vars list-item op stack])
+(defrecord Scope [name vars label])
+(defrecord Context [value next-reg next-cell vars
+                    list-item op stack scope])
 
 (defn get-ctx [visitor]
   (-> visitor .-context))
@@ -50,49 +58,48 @@
    (op-mapper op op1 op1 op2))
   ([op rd op1 op2]
    (case op
-     :add (str "add " rd ", " op1 ", " op2)
-     :mul (str "mul " rd ", " op1 ", " op2)
-     :div (str "div " rd ", " op1 ", " op2)
-     :sub (str "sub " rd ", " op1 ", " op2)
-     :eq (str "seq " rd ", " op1 ", " op2))))
+     :add (asm/add rd op1 op2)
+     :mul (asm/mul rd op1 op2)
+     :div (asm/div rd op1 op2)
+     :sub (asm/sub rd op1 op2)
+     :eq (asm/seq rd op1 op2))))
 
 (defn is-item-expr [expr]
-  (try
-    (.item expr)
-    (catch Exception _ nil)))
-
-(defn is-list-expr [expr]
-  (try
-    (.list expr)
-    (catch Exception _ nil)))
+  (-> (try
+        (.item expr)
+        (catch Exception _ nil)) nil? not))
 
 (defn append-asm [ctx cmd]
   (let [op (:op ctx)]
-    (assoc ctx :op (conj op cmd))))
+    (if (string? cmd)
+      (assoc ctx :op (conj op cmd))
+      (assoc ctx :op (into op cmd)))))
 
 (defn comparison-op-mapper [ctx op rd r1 r2]
   (case op
-    :less (append-asm ctx (str "slt " rd ", " r1 ", " r2))
-    :eq (append-asm ctx (str "seq " rd ", " r1 ", " r2))
-    :gr-eq (append-asm ctx (str "sge " rd ", " r1 ", " r2))
-    :neq (append-asm ctx (str "sne " rd ", " r1 ", " r2))
+    :less (append-asm ctx (asm/slt rd r1 r2))
+    :eq (append-asm ctx (asm/seq rd r1 r2))
+    :gr-eq (append-asm ctx (asm/sge rd r1 r2))
+    :neq (append-asm ctx (asm/sne rd r1 r2))
     :less-eq (-> ctx
-                 (comparison-op-mapper :less "x1" r1 r2)
-                 (comparison-op-mapper :eq "x2" r1 r2)
-                 (append-asm (op-mapper :add rd r1 r2))
-                 (append-asm (str "li x1, 2"))
-                 (comparison-op-mapper :eq rd rd "x1"))
+                 (comparison-op-mapper :less x1 r1 r2)
+                 (comparison-op-mapper :eq x2 r1 r2)
+                 (append-asm (op-mapper :add rd x1 x2))
+                 (append-asm (asm/li x1 2))
+                 (comparison-op-mapper :eq rd rd x1))
     :gr (-> ctx
-            (comparison-op-mapper :gr-eq "x1" r1 r2)
-            (comparison-op-mapper :neq "x2" r1 r2)
-            (append-asm (op-mapper :add rd r1 r2))
-            (append-asm (str "li x1, 2"))
-            (comparison-op-mapper :eq rd rd "x1"))))
+            (comparison-op-mapper :gr-eq x1 r1 r2)
+            (comparison-op-mapper :neq x2 r1 r2)
+            (append-asm (op-mapper :add rd x1 x2))
+            (append-asm (asm/li x1 2))
+            (comparison-op-mapper :eq rd rd x1))))
+
+(defn next-reg-ctx [ctx]
+  (let [next-reg (:next-reg ctx)]
+    [(str "x" next-reg) (assoc ctx :next-reg (inc next-reg))]))
 
 (defn next-reg [visitor]
-  (let [ctx (-> visitor .-context)
-        next-reg (:next-reg ctx)]
-    [(str "x" next-reg) (assoc ctx :next-reg (inc next-reg))]))
+  (-> visitor .-context next-reg-ctx))
 
 (defn set-reg-by-acc [ctx reg]
   (append-asm ctx (op-mapper :add reg zero-reg acc-reg)))
@@ -102,10 +109,11 @@
 
 (defn load-var [ctx var reg]
   (let [var (-> ctx :vars (get var))
-        {:keys [value addr]} (-> var :stack first)]
-    (if (nil? addr)
-      (append-asm ctx (str "li " reg ", " value))
-      (append-asm ctx (str "lw " reg ", x0, " addr)))))
+        {:keys [value type]} (-> var :stack first)]
+    (case type
+      :memory (append-asm ctx (asm/lw reg value))
+      :value (append-asm ctx (asm/li reg value))
+      :reg (append-asm ctx (asm/add reg x0 value)))))
 
 ;(+ 23 (* a b) (/ (/ b 2) 4 5 (/ 4 2)) (- 4 2 (+ b 3)) 3)
 
@@ -114,19 +122,19 @@
         {:keys [value type]} lead]
     (case type
       :int (if (and (empty? ns) (empty? vars))
-             (append-asm ctx (str "li " acc-reg ", " value))
+             (append-asm ctx (asm/li acc-reg value))
              (-> ctx
-                 (append-asm (str "li " acc-reg ", " value))
-                 (append-asm (str "li x21, " simplified))
-                 (append-asm (op-mapper op acc-reg "x21"))))
+                 (append-asm (asm/li acc-reg value))
+                 (append-asm (asm/li x21 simplified))
+                 (append-asm (op-mapper op acc-reg x21))))
       :var (-> ctx
                (load-var value acc-reg)
-               (append-asm (str "li x21, " simplified))
-               (append-asm (op-mapper op acc-reg "x21")))
+               (append-asm (asm/li x21 simplified))
+               (append-asm (op-mapper op acc-reg x21)))
       :expr (-> ctx
                 (append-asm (op-mapper :add acc-reg zero-reg nested-res-reg))
-                (append-asm (str "li x21, " simplified))
-                (append-asm (op-mapper op acc-reg "x21"))))))
+                (append-asm (asm/li x21 simplified))
+                (append-asm (op-mapper op acc-reg x21))))))
 
 (defn set-nested-res [ctx val]
   (-> ctx
@@ -134,7 +142,7 @@
 
 (defn set-nested-res-scalar [ctx val]
   (-> ctx
-      (append-asm (str "li " nested-res-reg ", " val))))
+      (append-asm (asm/li nested-res-reg val))))
 
 (defn append-vars-op
   ([ctx op vars]
@@ -145,20 +153,18 @@
    (if (empty? vars)
      ctx
      (let [var (-> ctx :vars (get var))
-           {:keys [value addr]} (-> var :stack first)
+           {:keys [value type]} (-> var :stack first)
            vars (drop 1 vars)
            var (first vars)]
-       (-> (if (nil? addr)
-             (-> ctx
-                 (append-asm (str "li x21, " value))
-                 (append-asm (op-mapper op "x20" "x21")))
-             (-> ctx
-                 (append-asm (str "lw x21, x0, " addr))
-                 (append-asm (op-mapper op "x20" "x21"))))
+       (-> (case type
+             :value (-> ctx
+                        (append-asm (asm/li x21 value))
+                        (append-asm (op-mapper op acc-reg x21)))
+             :memory (-> ctx
+                         (append-asm (asm/lw x21 value))
+                         (append-asm (op-mapper op acc-reg x21)))
+             :reg (append-asm ctx (op-mapper op acc-reg value)))
            (recur op vars var))))))
-
-(defn get-value [visitor]
-  (-> visitor .-context :value))
 
 (defn set-list-item [visitor value type]
   (let [ctx (-> visitor .-context)]
@@ -167,42 +173,38 @@
 (defn get-list-item [visitor]
   (-> visitor .-context :list-item))
 
-(defn get-var [visitor var]
-  (let [var (-> visitor .-context :vars (get var))]
-    (if (nil? var)
-      nil
-      (-> var :stack first))))
-
-(defn get-var-addr [visitor var]
-  (let [var (-> visitor (get-var var))]
-    (if (nil? var) nil (:addr var))))
-
-(defn get-var-value [visitor var]
-  (let [var (-> visitor (get-var var))]
-    (if (nil? var) nil (:value var))))
-
 (defn allocate [ctx]
   (let [next-addr (:next-cell ctx)]
     [(assoc ctx :next-cell (dec next-addr)) next-addr]))
 
-(defn create-var [visitor var-name value]
+(defn update-var-stack [vars var-name stack-entry]
+  (-> vars
+      (get var-name)
+      :stack
+      (assoc :stack (conj (-> vars (get var-name) :stack) stack-entry))))
+
+(defn create-var [visitor var-name type value]
   (let [ctx (-> visitor .-context)
         vars (-> ctx :vars)
         exist? (-> vars (get var-name) nil?)
-        [ctx addr val] (if (nil? value)
-                         (-> ctx allocate (conj value))
-                         [ctx nil value])]
-    (if (not exist?)
-      (-> ctx (assoc :vars
-                     (assoc vars
-                            var-name
-                            (->Var var-name '((->VarStackEntry val addr)))))))))
+        [ctx val type] (case type
+                         :memory (-> ctx allocate (conj :memory))
+                         :value [ctx value :value]
+                         :reg (let [[reg ctx] (-> ctx
+                                                  next-reg-ctx)]
+                                [ctx reg :reg]))
+        vars (:vars ctx)
+        stack-entry (->VarStackEntry type val)
+        var (if (not exist?)
+              (->Var var-name (conj '() stack-entry))
+              (update-var-stack vars var-name stack-entry))]
+    [[var-name stack-entry] (assoc ctx :vars (assoc vars var-name var))]))
 
 (defn get-vars-map [ctx]
   (->> ctx :vars
        (filter (fn [[_ {:keys [stack]}]]
-                 (let [{:keys [value addr]} (first stack)]
-                   (and (nil? addr) (-> value nil? not)))))
+                 (let [{:keys [value type]} (first stack)]
+                   (and (= type :value) (-> value nil? not)))))
        (map (fn [[name {:keys [stack]}]]
               {name (-> stack first :value)}))
        (reduce into {})))
@@ -213,13 +215,46 @@
     (assoc ctx :next-reg (- next-reg count))))
 
 (defn jump-if-zero [ctx reg target]
-  (append-asm ctx (str "beq " reg ", x0, " target)))
+  (append-asm ctx (asm/beq reg zero-reg target)))
 
 (defn jump-if-not-zero [ctx reg target]
-  (append-asm ctx (str "bne " reg ", x0, " target)))
+  (append-asm ctx (asm/bne reg zero-reg target)))
 
 (defn set-label [ctx label]
   (append-asm ctx (str label ":")))
+
+(defn create-scope [ctx name label]
+  (let [name (->> ctx :scope count (str name))
+        scope (-> ctx :scope (conj (->Scope name {} label)))]
+    (assoc ctx :scope scope)))
+
+(defn add-scoped-var [ctx name i]
+  (let [scope (-> ctx :scope first)
+        scope-stack (->> ctx :scope (drop 1))
+        vars (-> scope :vars
+                 (assoc i name))
+        scope (assoc scope :vars vars)]
+    (assoc ctx :scope (conj scope-stack scope))))
+
+(defn drop-scope [ctx]
+  (let [ctx (-> ctx .-context)
+        scoped-vars (map second (-> ctx :scope first :vars))]
+    (reduce (fn [ctx name]
+              (let [vars (-> ctx :vars)
+                    var (-> vars (get name))
+                    var (assoc var :stack (drop 1 (:stack var)))
+                    vars (assoc vars name var)]
+                (assoc ctx :vars vars))) ctx scoped-vars)))
+
+(defn set-reg-limit [ctx limit]
+  (assoc ctx :value limit))
+
+(defn dec-reg-limit [ctx]
+  (let [reg-limit (:value ctx)]
+    (assoc ctx :value (dec reg-limit))))
+
+(defn generate-scope-name [prefix suffix]
+  (str prefix "_" (System/currentTimeMillis) "_" suffix))
 
 (deftype VisitorImpl [context]
   GrammarVisitor
@@ -237,11 +272,129 @@
             val))
         _)))
 
+  (visitBinding [_ node])
+
+  (visitBindings [_ node]
+    (second (reduce (fn [[i visitor] node]
+                      (if (->> node (instance? GrammarParser$BindingContext) not)
+                        [i visitor]
+                        (let [id (-> node .ID .getText)
+                              visitor (.visit visitor (.getChild node 1))
+                              type (if (> (-> visitor .-context :value) 0) :reg :memory)
+                              expr (.getChild node 1)
+                              [[name {:keys [value type]}] ctx] (-> (if (is-item-expr node)
+                                                                      (-> (let [ctx (.-context visitor)
+                                                                                {:keys [value type]} (:list-item ctx)]
+                                                                            (case type
+                                                                              :int (append-asm ctx (asm/li x22 value))
+                                                                              :var (let [{:keys [value type]} (-> ctx :vars (get value) :stack first)]
+                                                                                     (case type
+                                                                                       :memory (append-asm ctx (asm/lw x22 value))
+                                                                                       :reg (append-asm ctx (asm/add x22 x0 value))
+                                                                                       :value (append-asm ctx (asm/li x22 value))))))
+                                                                          VisitorImpl.)
+                                                                      visitor)
+                                                                    (create-var id type nil))
+                              ctx (add-scoped-var ctx name i)]
+                          [(inc i) (case type
+                                       :memory (-> ctx
+                                                      (append-asm (asm/sw x1 value x22))
+                                                      VisitorImpl.)
+                                       :reg (-> ctx
+                                                   (append-asm (asm/add value x0 x22))
+                                                   dec-reg-limit
+                                                   VisitorImpl.))]))) [0 _] (-> node .-children))))
+
+  (visitLet [_ node]
+    (let [ctx (-> _ .-context)
+          ctx (-> ctx (create-scope "let" nil) (set-reg-limit 3) VisitorImpl.)
+          ctx (->> node
+                   .bindings
+                   (.visit ctx))
+          t (.-context ctx)]
+      (-> ctx
+          (.visit (-> node .block))
+          drop-scope
+          VisitorImpl.)))
+
+  (visitLoop [_ node]
+    (let [ctx (-> _ .-context)
+          start-label (generate-scope-name "start_loop" "loop")
+          ctx (-> ctx (create-scope "loop" start-label) (set-reg-limit 3) VisitorImpl.)
+          ctx (->> node
+                   .bindings
+                   (.visit ctx))]
+      (-> ctx
+          .-context
+          (set-label start-label)
+          VisitorImpl.
+          (.visit (-> node .block))
+          drop-scope
+          VisitorImpl.)))
+
+  (visitDefn [_ node])
+
+  (visitBlock [_ node]
+    (reduce (fn [visitor ctx] (.visit visitor ctx)) _ (.expr node)))
+
+  (visitIf [_ node]
+    (let [ctx (->> node
+                   .-cond
+                   (.visit _)
+                   .-context)
+          else-label (generate-scope-name "else" "end")
+          end-label (generate-scope-name "end_if" "end")]
+      (-> ctx
+          (jump-if-zero x22 else-label)
+          VisitorImpl.
+          (.visit (->> node .-if_branch))
+          .-context
+          (append-asm (asm/jump end-label))
+          (set-label else-label)
+          VisitorImpl.
+          (.visit (->> node .-else_branch))
+          .context
+          (set-label end-label)
+          VisitorImpl.)))
+
+  (visitExpr [_ node]
+    (.visit _ (.getChild node 0)))
+
+  (visitProg [_ ctx]
+    (.visitChildren _ ctx))
+
+  (visitTerminal [ctx _] ctx)
+
+  (visitErrorNode [ctx _] ctx)
+
+  (visitId [_ node]
+    (let [var-name (->> node
+                        .ID
+                        .getText)]
+      (VisitorImpl. (set-list-item _ var-name :var))))
+
+  (visitInt [_ node]
+    (let [int-val (->> node
+                       .getText
+                       parse-long)]
+      (VisitorImpl. (set-list-item _ int-val :int))))
+
+  (visitStr [_ node]
+    (let [str (->> node .getText)
+          str (-> str (subs 1 (-> str count dec)))]
+      (VisitorImpl. (set-list-item _ str :str))))
+
+  (visitBool [_ node]
+    (let [bool (->> node .getText (= "true"))]
+      (if bool
+        (VisitorImpl. (set-list-item _ 1 :int))
+        (VisitorImpl. (set-list-item _ 0 :int)))))
+
   (visitList [_ node]
     (let [symbol (get-symbol node)
           ctx _
           items (reduce (fn [values expr]
-                          (if (-> (is-item-expr expr) nil? not)
+                          (if (is-item-expr expr)
                             (let [visited (.visit ctx expr)
                                   list-item (-> visited get-list-item)]
                               (conj values list-item))
@@ -275,7 +428,7 @@
                                        visitor (reduce (fn [ctx item]
                                                          (-> ctx
                                                              (.visit item) .-context
-                                                             (append-asm (op-mapper by "x20" reg "x22"))
+                                                             (append-asm (op-mapper by x20 reg x22))
                                                              (set-reg-by-acc reg)
                                                              (set-nested-res acc-reg)
                                                              VisitorImpl.)) visitor ns)]
@@ -285,7 +438,7 @@
                                      (let [[reg ctx] (next-reg ctx)]
                                        (case (:type item)
                                          :int [reg (-> ctx
-                                                       (append-asm (str "li " reg ", " (:value item)))
+                                                       (append-asm (asm/li reg (:value item)))
                                                        VisitorImpl.)]
                                          :var [reg (-> ctx
                                                        (load-var (:value item) reg)
@@ -304,7 +457,7 @@
                                         (-> (.-context ctx)
                                             (set-nested-res-scalar (if current 1 0))
                                             VisitorImpl.)
-                                        (let [end-label (->> (str by "_" (System/currentTimeMillis) "_end")
+                                        (let [end-label (->> (generate-scope-name by "end")
                                                              (drop 1)
                                                              (apply str))]
                                           (-> (loop [ns ns
@@ -345,7 +498,7 @@
                                    (-> ctx .context
                                        (set-nested-res-scalar current)
                                        VisitorImpl.)
-                                   (let [end-label (->> (str by "_" (System/currentTimeMillis) "_end")
+                                   (let [end-label (->> (generate-scope-name by "end")
                                                         (drop 1)
                                                         (apply str))]
                                      (-> (loop [ns ns
@@ -369,90 +522,92 @@
         :mul (process-num-list items :mul math/simplify-multiplication)
         :div (process-num-list items :div math/simplify-division)
         (:eq :gr :gr-eq :less :less-eq) (process-comparison-list items symbol)
-        (:and :or) (process-logic-list items symbol))))
+        (:and :or) (process-logic-list items symbol)
+
+        :recur (let [visitor ctx
+                     scopes (-> ctx .-context :scope)
+                     label (-> scopes first :label)]
+                 (if (empty? scopes)
+                   visitor
+                   (-> (let [{:keys [_ vars _]} (first scopes)]
+                         (loop [i 0
+                                ctx (-> visitor .-context)]
+                           (if (>= i (count vars))
+                             ctx
+                             (let [expr (-> node (.expr i))
+                                   var (get vars i)
+                                   {:keys [type value]} (-> ctx :vars (get var) :stack first)
+                                   cur-var value
+                                   ctx (-> ctx VisitorImpl. (.visit expr))
+                                   processed (let [{:keys [type value]} (-> ctx get-list-item)
+                                                   ctx (-> ctx .-context)]
+                                               (if (is-item-expr expr)
+                                                 (case type
+                                                   :int (-> ctx (append-asm (asm/li x22 value)))
+                                                   :var (if (= value cur-var)
+                                                          nil
+                                                          (let [var (-> ctx :vars (get value) :stack first)
+                                                                var-type (:type var)
+                                                                var-value (:value var)]
+                                                            (case var-type
+                                                              :memory (-> ctx
+                                                                          (append-asm (asm/lw x22 var-value)))
+                                                              :reg (-> ctx
+                                                                       (append-asm (asm/add x22 x0 var-value)))
+                                                              :value (-> ctx
+                                                                         (append-asm (asm/addi x22 x0 var-value)))))))
+                                                 ctx))]
+                               (if (nil? processed)
+                                 (recur (inc i) (-> ctx .-context))
+                                 (recur (inc i) (case type
+                                                  :memory (-> processed
+                                                              (append-asm (asm/sw x1 value x22)))
+                                                  :reg (-> processed
+                                                           (append-asm (asm/add value x0 x22))))))))))
+                       (append-asm (asm/jump label))
+                       VisitorImpl.))))))
 
 
-      ;(VisitorImpl.
-      ;  (update-value ctx (case symbol
-      ;                     :add (apply + items)
-      ;                     :mul (apply * items)
-      ;                     :div (apply / items)
-      ;                     :sub (apply - items)
-      ;                     :eq (apply = items)
-      ;                     :gr (apply > items)
-      ;                     :gr-eq (apply >= items)
-      ;                     :less (apply < items)
-      ;                     :less-eq (apply <= items)
-      ;                     :and (apply and-fun items)
-      ;                     :or (apply or-fun items)
-      ;                     :not (apply not items)
-      ;                     :print (apply println items)
-      ;                     :add-str (apply str items))))))
-
-  (visitBinding [_ node])
-    ;(let [id (-> node .ID .getText)
-    ;      val (-> _ (.visit (.getChild node 1)) get-value)
-    ;      var (->Var id scope val n)]
-    ;  (-> _
-    ;      (set-var var)
-    ;      VisitorImpl.)))
 
 
-  (visitBindings [_ node])
-    ;(let [[_ ctx] (reduce (fn [[i visitor] binding]
-    ;                        [(inc i) (.visit (-> visitor (update-value i) VisitorImpl.) binding)])
-    ;                      [0 _]
-    ;                      (-> node .-children))]
-    ;  ctx))
+  (visitNot_list [_ node]
+    (-> _
+        .-context _
+        (jump-if-zero nested-res-reg 2)
+        (set-nested-res-scalar 0)
+        (jump-if-zero zero-reg 2)
+        (jump-if-not-zero nested-res-reg 1)
+        (set-nested-res-scalar 1)
+        VisitorImpl.)))
 
-  (visitLet [_ node])
+(defn generate-system [visitor]
+  (loop [op [(asm/li x31 memory-size)]
+         i 1]
+    (if (= i 128)
+      op
+      (let [addr (- memory-size max-stack i)]
+        (-> op
+            (conj (asm/li x2 i))
+            (conj (asm/sw x1 addr x2))
+            (recur (inc i)))))))
 
-  (visitLoop [_ node])
-
-  (visitDefn [_ node])
-
-  (visitBlock [_ node])
-
-  (visitIf [_ node])
-
-  (visitExpr [_ node]
-    (.visit _ (.getChild node 0)))
-
-  (visitProg [_ ctx]
-    (.visitChildren _ ctx))
-
-  (visitTerminal [ctx _] ctx)
-
-  (visitErrorNode [ctx _] ctx)
-
-  (visitId [_ node]
-    (let [var-name (->> node
-                        .ID
-                        .getText)]
-      (VisitorImpl. (set-list-item _ var-name :var))))
-
-  (visitInt [_ node]
-    (let [int-val (->> node
-                       .getText
-                       parse-long)]
-      (VisitorImpl. (set-list-item _ int-val :int))))
-
-  (visitStr [_ node]
-    (let [str (->> node .getText)
-          str (-> str (subs 1 (-> str count dec)))]
-      (VisitorImpl. (set-list-item _ str :str))))
-
-  (visitBool [_ node]))
 
 (defn visit [^ParseTree tree]
-  (let [a (->VarStackEntry 1 nil)
-        b (->VarStackEntry nil 4234)
-        v (VisitorImpl. (->Context nil
-                                   5
-                                   (- last-addr max-stack ascii)
-                                   {"a" (->Var "a" (conj '() a))
-                                    "b" (->Var "b" (conj '() b))}
-                                   nil
-                                   []
-                                   '()))]
-    (.visit v tree)))
+  (let [v (-> (->Context nil
+                         5
+                         (- memory-size max-stack ascii str-op-buffer)
+                         {}
+                         nil
+                         []
+                         '()
+                         '())
+              VisitorImpl.
+              (.visit tree)
+              .-context)
+        op []; (generate-system v)
+        v (assoc v :op (into op (:op v)))]
+    v))
+
+
+
+
