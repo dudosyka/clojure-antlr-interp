@@ -1,4 +1,9 @@
-(let [a (+ 3 1)
+(defn func [a]
+  (if (not (= a 4))
+    (recur (+ a 1))
+    (+ a 0)))
+
+(let [a (func 1)
       b (+ a 3)]
   (loop [i 0
          a b]

@@ -6,6 +6,8 @@
 (def x20 "x20")
 (def x21 "x21")
 (def x22 "x22")
+(def x28 "x28")
+(def x29 "x29")
 (def x31 "x31")
 
 
@@ -51,9 +53,9 @@
 (defn sub [rd r1 r2]
   (str "sub " rd ", " r1 ", " r2))
 
-
-(defn jump [addr]
-  (str "jal " x1 ", " addr))
+(defn jump
+  ([addr] (jump addr x1))
+  ([addr reg] (str "jal " reg ", " addr)))
 
 (defn beq [r1 r2 target]
   (str "beq " r1 ", " r2 ", " target))
