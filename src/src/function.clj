@@ -1,9 +1,5 @@
 (ns function)
 
-(def on-parse)
-(println on-parse)
-
-
 (defn string_to_ascii [on-parse]
   (loop [on-parse on-parse
          parsed []]
@@ -15,7 +11,6 @@
                    length)
             remain (subs on-parse part (-> on-parse count))
             last (->> (subs on-parse 0 part) reverse (apply str))]
-        (println last remain)
         (recur
           remain
           (conj parsed (reduce (fn [acc char]

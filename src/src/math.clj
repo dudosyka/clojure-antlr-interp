@@ -28,7 +28,6 @@
                                                       (if (-> cur is-var?)
                                                         (let [var-name (:value cur)
                                                               var-value (get var-map var-name)]
-                                                          (println var-value)
                                                           (if (-> var-value nil? not)
                                                             (recur den not-simplified (f simplified var-value) variables)
                                                             (recur den not-simplified simplified (conj variables var-name))))

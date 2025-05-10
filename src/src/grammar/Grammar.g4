@@ -16,7 +16,7 @@ list:   '(' symbol=(RECUR|PRINT|ADD|ADDSTR|SUB|MUL|DIV|EQ|AND|OR|GR|GREQ|LESS|LE
 not_list: '(' NOT expr ')'
     ;
 
-binding: ID (expr);
+binding: ID expr;
 
 bindings: binding (NEWLINE binding)*;
 
