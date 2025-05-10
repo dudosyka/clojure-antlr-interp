@@ -1,6 +1,6 @@
 grammar Grammar;
 
-prog:   (expr|defn)*
+prog:   (expr|defn|NEWLINE)*
     ;
 
 
@@ -38,10 +38,6 @@ expr:   list
     |   loop
     |   if
     |   item
-    ;
-
-line:   expr
-    |   NEWLINE
     ;
 
 block: expr+;

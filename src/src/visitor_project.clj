@@ -245,7 +245,6 @@
 (defn drop-scope [visitor]
   (let [ctx (-> visitor .-context)
         scoped-vars (map second (-> ctx :scope first :vars))]
-    (println "Drop scope" ctx)
     (reduce (fn [ctx name]
               (let [vars (-> ctx :vars)
                     var (-> vars (get name))
@@ -254,6 +253,8 @@
                     vars (assoc vars name var)
                     ctx (assoc ctx :vars vars)]
                 (case type
+                  nil ctx
+                  :value ctx
                   :reg (-> ctx
                            (assoc :next-reg (-> ctx :next-reg dec)))
                   :memory (-> ctx
@@ -289,7 +290,6 @@
 
   (visitBindings [_ node]
     (second (reduce (fn [[i visitor] node]
-                      (println i node)
                       (let [id (-> node .ID .getText)
                             node (.expr node)
                             ctx (if (is-item-expr node)
@@ -382,7 +382,10 @@
                                (-> visitor .-context
                                    (assoc :load-item true)
                                    VisitorImpl.
-                                   (.visit expr))
+                                   (.visit expr)
+                                   .-context
+                                   (assoc :load-item false)
+                                   VisitorImpl.)
                                (.visit visitor expr))]) [0 _] (.expr node)) second)))
 
   (visitIf [_ node]
@@ -614,8 +617,6 @@
                                    (let [expr (-> node (.expr i))
                                          var (get vars i)
                                          {:keys [type value]} (-> ctx :vars (get var) :stack first)
-                                         cur-var value
-                                         ctx (-> ctx VisitorImpl. (.visit expr))
                                          processed (if (is-item-expr expr)
                                                      (-> ctx
                                                          (assoc :load-item true)
@@ -623,37 +624,12 @@
                                                          (.visit expr)
                                                          .-context
                                                          (assoc :load-item false))
-                                                     (-> ctx VisitorImpl. (.visit expr)))]
-                                         ;(let [{:keys [type value]} (-> ctx get-list-item)
-                                         ;      ctx (-> ctx .-context)]
-                                         ;  (if (is-item-expr expr)
-                                         ;    (case type
-                                         ;      :int (-> ctx (append-asm (asm/li x22 value)))
-                                         ;      :var (if (= value cur-var)
-                                         ;             nil
-                                         ;             (let [var (-> ctx :vars (get value) :stack first)
-                                         ;                   var-type (:type var)
-                                         ;                   var-value (:value var)]
-                                         ;               (case var-type
-                                         ;                 :memory (-> ctx
-                                         ;                             (append-asm (asm/lw x22 var-value)))
-                                         ;                 :reg (-> ctx
-                                         ;                          (append-asm (asm/add x22 x0 var-value)))
-                                         ;                 :value (-> ctx
-                                         ;                            (append-asm (asm/addi x22 x0 var-value)))))))
-                                         ;    ctx))]
+                                                     (-> ctx VisitorImpl. (.visit expr) .-context))]
                                      (recur (inc i) (case type
                                                       :memory (-> processed
                                                                   (append-asm (asm/sw x1 value x22)))
                                                       :reg (-> processed
                                                                (append-asm (asm/add value x0 x22)))))))))]
-                                     ;(if (nil? processed)
-                                     ;  (recur (inc i) (-> ctx .-context))
-                                     ;  (recur (inc i) (case type
-                                     ;                   :memory (-> processed
-                                     ;                               (append-asm (asm/sw x1 value x22)))
-                                     ;                   :reg (-> processed
-                                     ;                            (append-asm (asm/add value x0 x22))))))))))]
                      (case type
                        :no-recursion visitor
                        :invocation (-> ctx
