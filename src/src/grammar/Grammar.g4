@@ -5,6 +5,7 @@ prog:   (expr|defn|NEWLINE)*
 
 
 item:   INT     # int
+    |   '-' INT # negativeInt
     |   STR     # str
     |   BOOL    # bool
     |   ID      # id

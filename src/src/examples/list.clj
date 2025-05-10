@@ -4,7 +4,7 @@
     a))
 
 (let [a (func 1)
-      b (+ a 3)]
+      b (+ a -3)]
   (loop [i 0
          a b]
     (if (< a 10)

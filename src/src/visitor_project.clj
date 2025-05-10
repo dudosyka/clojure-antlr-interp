@@ -453,6 +453,21 @@
           (set-list-item int-val :int)
           VisitorImpl.)))
 
+  (visitNegativeInt [_ node]
+    (let [load-item (-> _ .-context :load-item)
+          int-val (->> node
+                       .INT
+                       .getText
+                       parse-long
+                       (* -1))]
+      (-> (if load-item
+            (-> _ .-context
+                (append-asm (asm/li x22 int-val))
+                VisitorImpl.)
+            _)
+          (set-list-item int-val :int)
+          VisitorImpl.)))
+
   (visitStr [_ node]
     (let [str (->> node .getText)
           str (-> str (subs 1 (-> str count dec)))]
