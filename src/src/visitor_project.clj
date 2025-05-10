@@ -1,11 +1,11 @@
 (ns visitor-project
-  (:require [clojure.string :as str]
-            [math]
+  (:require [math]
             [op]
             [logic]
             [asm]
-            [asm :refer [x0 x1 x2 x20 x21 x22 x28 x29 x31]])
-  (:import (com.grammar GrammarParser GrammarParser$BindingContext GrammarVisitor)
+            [asm :refer [x0 x1 x2 x20 x21 x22 x28 x29 x31]]
+            [strings])
+  (:import (com.grammar GrammarParser GrammarVisitor)
            (org.antlr.runtime.tree ParseTree)))
 
 (def zero-reg x0)
@@ -22,19 +22,15 @@
 (def return-label "return")
 
 
-
 (defrecord VarStackEntry [type value])
 (defrecord Var [name stack])
 (defrecord ListItem [type value])
-(defrecord Scope [name vars label type])
+(defrecord Scope [name vars label type next-cell next-reg])
 (defrecord Function [name label op args])
 (defrecord FunctionArg [name addr])
 (defrecord Context [value next-reg next-cell vars
                     list-item op stack scope
                     functions load-item])
-
-(defn get-ctx [visitor]
-  (-> visitor .-context))
 
 (def symbol-mapper {GrammarParser/ADD    :add
                     GrammarParser/MUL    :mul
@@ -75,6 +71,11 @@
         (.item expr)
         (catch Exception _ nil)) nil? not))
 
+(defn is-scalar [item]
+  (-> (try
+        (.ID item)
+        (catch Exception _ nil)) nil?))
+
 (defn append-asm [ctx cmd]
   (let [op (:op ctx)]
     (if (string? cmd)
@@ -113,9 +114,11 @@
 (defn copy-reg-to [ctx from to]
   (append-asm ctx (op-mapper :add to zero-reg from)))
 
+(defn get-var [ctx var]
+  (-> ctx :vars (get var) :stack first))
+
 (defn load-var [ctx var reg]
-  (let [var (-> ctx :vars (get var))
-        {:keys [value type]} (-> var :stack first)]
+  (let [{:keys [value type]} (get-var ctx var)]
     (case type
       :memory (append-asm ctx (asm/lw reg value))
       :value (append-asm ctx (asm/li reg value))
@@ -230,8 +233,9 @@
   (append-asm ctx (str label ":")))
 
 (defn create-scope [ctx name label type]
-  (let [name (->> ctx :scope count (str name))
-        scope (-> ctx :scope (conj (->Scope name {} label type)))]
+  (let [ {:keys [next-cell next-reg]} ctx
+        name (->> ctx :scope count (str name))
+        scope (-> ctx :scope (conj (->Scope name {} label type next-cell next-reg)))]
     (assoc ctx :scope scope)))
 
 (defn add-scoped-var [ctx name i]
@@ -244,21 +248,17 @@
 
 (defn drop-scope [visitor]
   (let [ctx (-> visitor .-context)
+        {:keys [next-cell next-reg]} (-> ctx :scope first)
         scoped-vars (map second (-> ctx :scope first :vars))]
     (reduce (fn [ctx name]
               (let [vars (-> ctx :vars)
                     var (-> vars (get name))
-                    type (-> var :stack first :type)
                     var (assoc var :stack (drop 1 (:stack var)))
-                    vars (assoc vars name var)
-                    ctx (assoc ctx :vars vars)]
-                (case type
-                  nil ctx
-                  :value ctx
-                  :reg (-> ctx
-                           (assoc :next-reg (-> ctx :next-reg dec)))
-                  :memory (-> ctx
-                              (assoc :next-cell (-> ctx :next-cell inc)))))) ctx scoped-vars)))
+                    vars (assoc vars name var)]
+                (-> ctx
+                    (assoc :vars vars)
+                    (assoc :next-cell next-cell)
+                    (assoc :next-reg next-reg)))) ctx scoped-vars)))
 
 (defn set-reg-limit [ctx limit]
   (assoc ctx :value limit))
@@ -269,6 +269,9 @@
 
 (defn generate-scope-name [prefix suffix]
   (str prefix "_" (System/currentTimeMillis) "_" suffix))
+
+(defn syntax-error [visitor node]
+  (throw (Exception. (str "Bad operand type " (str visitor) " " (str node)))))
 
 (deftype VisitorImpl [context]
   GrammarVisitor
@@ -289,29 +292,34 @@
   (visitBinding [_ node])
 
   (visitBindings [_ node]
-    (second (reduce (fn [[i visitor] node]
-                      (let [id (-> node .ID .getText)
-                            node (.expr node)
-                            ctx (if (is-item-expr node)
-                                  (-> visitor .-context
-                                      (assoc :load-item true)
-                                      VisitorImpl.
-                                      (.visit node)
-                                      .-context
-                                      (assoc :load-item false)
-                                      VisitorImpl.)
-                                  (.visit visitor node))
-                            new-var-type (if (> (-> visitor .-context :value) 0) :reg :memory)
-                            [[name {:keys [value type]}] ctx] (create-var ctx id new-var-type nil)
-                            ctx (add-scoped-var ctx name i)]
-                        [(inc i) (case type
-                                   :memory (-> ctx
-                                               (append-asm (asm/sw x1 value x22))
-                                               VisitorImpl.)
-                                   :reg (-> ctx
-                                            (append-asm (asm/add value x0 x22))
-                                            dec-reg-limit
-                                            VisitorImpl.))])) [0 _] (-> node .binding))))
+    (let [load-item (fn [visitor node default]
+                      (if (is-scalar node)
+                        (let [visitor (.visit visitor node)]
+                          [:value (-> visitor .-context :list-item :value) visitor])
+                        (let [ctx (.context visitor)
+                              {:keys [value type]} (->> node .ID .getText (get-var ctx))]
+                          (if (= type :value)
+                            [:value value visitor]
+                            [default value visitor]))))]
+      (-> (reduce (fn [[i visitor] node]
+                    (let [id (-> node .ID .getText)
+                          node (.expr node)
+                          new-var-type (if (> (-> visitor .-context :value) 0) :reg :memory)
+                          [var-type value visitor] (if (is-item-expr node)
+                                                     (load-item visitor node new-var-type)
+                                                     [new-var-type nil (.visit visitor node)])
+                          [[name {:keys [value type]}] ctx] (create-var visitor id var-type value)
+                          ctx (add-scoped-var ctx name i)]
+                      [(inc i) (case type
+                                 :value (VisitorImpl. ctx)
+                                 :memory (-> ctx
+                                             (append-asm (asm/sw x1 value x22))
+                                             VisitorImpl.)
+                                 :reg (-> ctx
+                                          (append-asm (asm/add value x0 x22))
+                                          dec-reg-limit
+                                          VisitorImpl.))])) [0 _] (-> node .binding))
+          second)))
 
   (visitLet [_ node]
     (let [ctx (-> _ .-context)
@@ -492,6 +500,8 @@
                           (if (is-item-expr expr)
                             (let [visited (.visit ctx expr)
                                   list-item (-> visited get-list-item)]
+                              (when (and (not (contains? #{:print :str} symbol)) (= :str (:type list-item)))
+                                (syntax-error visited expr))
                               (conj values list-item))
                             (conj values (->ListItem :expr expr)))) [] (.expr node))
           vars (get-vars-map (-> ctx .-context))
@@ -719,7 +729,7 @@
 
 (defn visit [^ParseTree tree]
   (let [ctx (-> (->Context nil
-                           5
+                           min-op-reg
                            (- memory-size max-stack ascii str-op-buffer)
                            {}
                            nil
