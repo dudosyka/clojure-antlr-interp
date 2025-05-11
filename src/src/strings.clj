@@ -1,10 +1,12 @@
 (ns strings
   (:require [asm]
-            [asm :refer [x1 x2]]))
+            [asm :refer [x1 x2]]
+            [clojure.string :as str]))
 
 
 (defrecord ListItem [type data-type value])
 (defrecord VarItem [type value])
+(defrecord StringToLoad [string start-cell])
 
 (defn- is-var? [item]
   (-> item :type (= :var)))
@@ -63,3 +65,26 @@
                                           (append-asm (asm/li x1 val))
                                           (append-asm (asm/sw x2 addr x1)))]) [start-addr []] addr-list)]
     cmd))
+
+(defn get-string-addr [ctx str]
+  (-> (filter #(-> % :string (= str)) (:strings-to-load ctx)) first :start-cell))
+
+(defn add-string-on-load [ctx str]
+  (let [cur (:strings-to-load ctx)
+        next-addr (:next-cell ctx)
+        len (-> str count (+ 3) (quot 2) (+ 1))
+        exists (-> (filter #(-> % :string (= str)) cur) first)]
+    (if (-> exists nil? not)
+      [(:start-cell exists) ctx]
+      [(dec next-addr) (-> ctx
+                           (assoc :strings-to-load (conj cur (->StringToLoad str (dec next-addr))))
+                           (assoc :next-cell (- next-addr len)))])))
+
+(defn sum-strings [in]
+  (reduce (fn [acc cur]
+            (let [{:keys [string start-cell]} cur]
+              (-> acc
+                  (into (to-asm start-cell (-> string
+                                               (str/replace #"\\n" "\n")
+                                               (str/replace #"\\t" "\t"))))
+                  (conj "\n\n")))) [] in))

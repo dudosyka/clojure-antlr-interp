@@ -1,7 +1,7 @@
-(defn fib [^int n]
-  (if (or (= n 1) (= n 2))
-    1
-    (+ (fib (- n 1)) (fib (- n 2)))))
+(defn test [^int a]
+  (+ a 5))
 
-(if true
-  (println (fib 10)))
+(test 123)
+
+(defn loaop [^str a]
+  (print a))

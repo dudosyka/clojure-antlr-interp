@@ -1,23 +1,33 @@
 (ns interpret
   (:require [clojure.string :as str]
             [visitor]
-            [visitor-project])
+            [errors]
+            [visitor-asm])
   (:import (com.grammar GrammarLexer GrammarParser)
            (java.io FileInputStream)
+           (errors ErrorListener)
            (org.antlr.v4.runtime ANTLRInputStream CommonTokenStream)))
-;(+ 1 (+ a 2))
+
 (defn -main [args]
+  (swap! errors/got-errors errors/clear)
   (let [input-file (first args)
-        tree (->> input-file
-                  (new FileInputStream)
-                  (new ANTLRInputStream)
-                  (new GrammarLexer)
-                  (new CommonTokenStream)
-                  (new GrammarParser)
-                  (.prog))]
-    ;(println "Выполнение: " input-file)
-    ;(visitor/visit tree)
-    (let [ctx (visitor-project/visit tree)
+        parser-error-listener (ErrorListener.)
+        lexer-error-listener (ErrorListener.)
+        lexer (->> input-file
+                   (new FileInputStream)
+                   (new ANTLRInputStream)
+                   (new GrammarLexer))
+        _ (.removeErrorListeners lexer)
+        parser (->> lexer
+                    (new CommonTokenStream)
+                    (new GrammarParser))
+        _ (.removeErrorListeners parser)
+        _ (.addErrorListener parser parser-error-listener)
+        _ (.addErrorListener lexer lexer-error-listener)
+        tree (.prog parser)]
+    (when @errors/got-errors
+      (throw (Exception. "Compilation failed! Syntax errors found")))
+    (let [ctx (visitor-asm/visit tree)
           asm (->> ctx :op (str/join "\n"))]
       (println asm))))
 
