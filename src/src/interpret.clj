@@ -30,3 +30,5 @@
     (let [ctx (visitor-asm/visit tree)
           asm (->> ctx :op (str/join "\n"))]
       (println asm))))
+
+(-main "/Users/dudosyka/IdeaProjects/compilers/src/src/examples/comments.clj")

@@ -83,3 +83,5 @@ BOOL_TYPE: '^bool';
 ID  :   [a-zA-Z_-]+ ;
 NEWLINE:'\r'? '\n' ;
 WS  :   [ \t]+ -> skip ;
+SINGLE_LINE_COMMENT: ';' ~[\r\n]* -> skip ;
+MULTI_LINE_COMMENT: '/*' .*? '*/' -> skip ;
