@@ -1,11 +1,12 @@
 (ns visitor-project
-  (:require [math]
+  (:require [clojure.string :as str]
+            [math]
             [op]
             [logic]
             [asm]
-            [asm :refer [x0 x1 x2 x20 x21 x22 x28 x29 x31]]
+            [asm :refer [x0 x1 x2 x3 x5 x20 x21 x22 x25 x26 x27 x28 x29 x31]]
             [strings])
-  (:import (com.grammar GrammarParser GrammarVisitor)
+  (:import (com.grammar GrammarParser GrammarParser$IdContext GrammarVisitor)
            (org.antlr.runtime.tree ParseTree)))
 
 (def zero-reg x0)
@@ -16,38 +17,49 @@
 (def max-stack 1000)
 (def ascii 128)
 (def ascii-num-char-start 48)
-(def min-op-reg 5)
+(def min-op-reg 6)
 
 (def invoke-label "invoke")
 (def return-label "return")
+(def sum-str-int-label "sum_str_int")
+(def print-str-label "print_str")
 
-
-(defrecord VarStackEntry [type value])
+(defrecord VarStackEntry [type value data-type pure-value])
 (defrecord Var [name stack])
 (defrecord ListItem [type value])
 (defrecord Scope [name vars label type next-cell next-reg])
-(defrecord Function [name label op args])
+(defrecord Function [name label op args label-save label-load scope-name])
 (defrecord FunctionArg [name addr])
+(defrecord StringToLoad [string start-cell])
+(defrecord Return [type value])
 (defrecord Context [value next-reg next-cell vars
                     list-item op stack scope
-                    functions load-item])
+                    functions load-item return
+                    strings-to-load])
 
-(def symbol-mapper {GrammarParser/ADD    :add
-                    GrammarParser/MUL    :mul
-                    GrammarParser/DIV    :div
-                    GrammarParser/SUB    :sub
-                    GrammarParser/EQ     :eq
-                    GrammarParser/GR     :gr
-                    GrammarParser/GREQ   :gr-eq
-                    GrammarParser/LESS   :less
-                    GrammarParser/LESSEQ :less-eq
-                    GrammarParser/AND    :and
-                    GrammarParser/OR     :or
-                    GrammarParser/NOT    :not
-                    GrammarParser/PRINT  :print
-                    GrammarParser/RECUR  :recur
-                    GrammarParser/ADDSTR :add-str
-                    GrammarParser/ID     :id})
+(def symbol-mapper {GrammarParser/ADD      :add
+                    GrammarParser/MUL      :mul
+                    GrammarParser/DIV      :div
+                    GrammarParser/SUB      :sub
+                    GrammarParser/EQ       :eq
+                    GrammarParser/GR       :gr
+                    GrammarParser/GREQ     :gr-eq
+                    GrammarParser/LESS     :less
+                    GrammarParser/LESSEQ   :less-eq
+                    GrammarParser/AND      :and
+                    GrammarParser/OR       :or
+                    GrammarParser/NOT      :not
+                    GrammarParser/PRINT    :print
+                    GrammarParser/PRINTLN  :println
+                    GrammarParser/RECUR    :recur
+                    GrammarParser/ADDSTR   :add-str
+                    GrammarParser/ID       :id})
+
+(def string-ops #{:add-str :print :println :eq :recur :id})
+
+(def type-mapper {GrammarParser/STR_TYPE :str
+                  GrammarParser/INT_TYPE :int
+                  GrammarParser/BOOL_TYPE :int})
 
 (defn get-symbol [ctx]
   (->> ctx
@@ -70,11 +82,6 @@
   (-> (try
         (.item expr)
         (catch Exception _ nil)) nil? not))
-
-(defn is-scalar [item]
-  (-> (try
-        (.ID item)
-        (catch Exception _ nil)) nil?))
 
 (defn append-asm [ctx cmd]
   (let [op (:op ctx)]
@@ -182,28 +189,28 @@
 (defn get-list-item [visitor]
   (-> visitor .-context :list-item))
 
-(defn allocate [ctx]
-  (let [next-addr (:next-cell ctx)]
-    [(assoc ctx :next-cell (dec next-addr)) next-addr]))
+(defn allocate
+  ([ctx] (allocate ctx 1))
+  ([ctx cell-count]
+   (let [next-addr (:next-cell ctx)]
+     [(assoc ctx :next-cell (- next-addr cell-count)) next-addr])))
 
 (defn update-var-stack [vars var-name stack-entry]
   (-> vars
       (get var-name)
-      :stack
       (assoc :stack (conj (-> vars (get var-name) :stack) stack-entry))))
 
-(defn create-var [visitor var-name type value]
+(defn create-var [visitor var-name type value data-type pure-value]
   (let [ctx (-> visitor .-context)
         vars (-> ctx :vars)
-        exist? (-> vars (get var-name) nil?)
+        exist? (-> vars (get var-name) nil? not)
         [ctx val type] (case type
                          :memory (-> ctx allocate (conj :memory))
                          :value [ctx value :value]
-                         :reg (let [[reg ctx] (-> ctx
-                                                  next-reg-ctx)]
+                         :reg (let [[reg ctx] (next-reg-ctx ctx)]
                                 [ctx reg :reg]))
         vars (:vars ctx)
-        stack-entry (->VarStackEntry type val)
+        stack-entry (->VarStackEntry type val data-type pure-value)
         var (if (not exist?)
               (->Var var-name (conj '() stack-entry))
               (update-var-stack vars var-name stack-entry))]
@@ -216,6 +223,13 @@
                    (and (= type :value) (-> value nil? not)))))
        (map (fn [[name {:keys [stack]}]]
               {name (-> stack first :value)}))
+       (reduce into {})))
+
+(defn string-vars-map [ctx]
+  (->> ctx :vars
+       (map (fn [[name {:keys [stack]}]]
+              (let [{:keys [pure-value data-type]} (-> stack first)]
+               {name (strings/->VarItem data-type pure-value)})))
        (reduce into {})))
 
 (defn release-reg [visitor count]
@@ -254,11 +268,11 @@
               (let [vars (-> ctx :vars)
                     var (-> vars (get name))
                     var (assoc var :stack (drop 1 (:stack var)))
-                    vars (assoc vars name var)]
+                    vars (assoc vars name var)
+                    scopes (:scope ctx)]
                 (-> ctx
-                    (assoc :vars vars)
-                    (assoc :next-cell next-cell)
-                    (assoc :next-reg next-reg)))) ctx scoped-vars)))
+                    (assoc :scope (drop 1 scopes))
+                    (assoc :vars vars)))) ctx scoped-vars)))
 
 (defn set-reg-limit [ctx limit]
   (assoc ctx :value limit))
@@ -268,10 +282,77 @@
     (assoc ctx :value (dec reg-limit))))
 
 (defn generate-scope-name [prefix suffix]
-  (str prefix "_" (System/currentTimeMillis) "_" suffix))
+  (str (str/replace prefix #"-" "_") "_" (long (rand 10000)) (System/currentTimeMillis) (long (rand 10000)) "_" suffix))
 
 (defn syntax-error [visitor node]
   (throw (Exception. (str "Bad operand type " (str visitor) " " (str node)))))
+
+(defn set-return [ctx type value]
+  (assoc ctx :return (->Return type value)))
+
+(defn get-string-addr [ctx str]
+  (-> (filter #(-> % :string (= str)) (:strings-to-load ctx)) first :start-cell))
+
+(defn add-string-on-load [ctx str]
+  (let [cur (:strings-to-load ctx)
+        next-addr (:next-cell ctx)
+        len (-> str count (+ 3) (quot 2) (+ 1))
+        exists (-> (filter #(-> % :string (= str)) cur) first)]
+    (if (-> exists nil? not)
+      [(:start-cell exists) ctx]
+      [(dec next-addr) (-> ctx
+                           (assoc :strings-to-load (conj cur (->StringToLoad str (dec next-addr))))
+                           (assoc :next-cell (- next-addr len)))])))
+
+(defn invoke [ctx label]
+  (-> ctx
+      (append-asm (asm/li x1 -1))
+      (append-asm (asm/li x29 label))
+      (append-asm (asm/jump invoke-label x28))))
+
+(defn append-sum-str-int [ctx]
+  (invoke ctx sum-str-int-label))
+
+(defn generate-save-and-load-regs [label-save label-load args used-regs]
+  (let [[save-ops load-ops] (loop [save-ops []
+                                   load-ops []
+                                   i 0
+                                   args args]
+                              (if (empty? args)
+                                [save-ops load-ops]
+                                (let [{:keys [addr]} (get args i)
+                                      save-ops (-> save-ops
+                                                   (conj (asm/addi x5 x5 -1))
+                                                   (into (asm/lw x2 addr))
+                                                   (into [(asm/sw x5 x2)]))
+                                      load-ops (-> []
+                                                   (conj (asm/lw-reg x2 x5))
+                                                   (into (asm/sw x3 addr x2))
+                                                   (conj (asm/addi x5 x5 1))
+                                                   (into load-ops))]
+                                  (recur save-ops load-ops (inc i) (dissoc args i)))))
+        [save-reg-ops load-reg-ops] (loop [save-ops []
+                                           load-ops []
+                                           regs used-regs]
+                                      (if (empty? regs)
+                                        [save-ops load-ops]
+                                        (let [reg (str "x" (first regs))
+                                              save-ops (-> save-ops
+                                                           (conj (asm/addi x5 x5 -1))
+                                                           (conj (asm/sw x5 reg)))
+                                              load-ops (-> []
+                                                           (conj (asm/lw-reg reg x5))
+                                                           (conj (asm/addi x5 x5 1))
+                                                           (into load-ops))]
+                                          (recur save-ops load-ops (drop 1 regs)))))]
+    (let [save-ops (into save-ops save-reg-ops)
+          load-ops (into load-reg-ops load-ops)
+          save-ops (into [(str label-save ":")] save-ops)
+          load-ops (into [(str label-load ":")] load-ops)]
+      [(-> save-ops
+           (conj (asm/jump return-label x1)))
+       (-> load-ops
+           (conj (asm/jump return-label x1)))])))
 
 (deftype VisitorImpl [context]
   GrammarVisitor
@@ -289,26 +370,38 @@
             val))
         _)))
 
-  (visitBinding [_ node])
-
   (visitBindings [_ node]
     (let [load-item (fn [visitor node default]
-                      (if (is-scalar node)
-                        (let [visitor (.visit visitor node)]
-                          [:value (-> visitor .-context :list-item :value) visitor])
-                        (let [ctx (.context visitor)
-                              {:keys [value type]} (->> node .ID .getText (get-var ctx))]
-                          (if (= type :value)
-                            [:value value visitor]
-                            [default value visitor]))))]
+                      (let [visitor (-> visitor
+                                        .-context
+                                        (assoc :load-item true)
+                                        VisitorImpl.
+                                        (.visit node)
+                                        .-context
+                                        (assoc :load-item false)
+                                        VisitorImpl.)
+                            return (-> visitor .-context :return)
+                            {:keys [value type]} (-> visitor .-context :list-item)
+                            default (if (= type :str) :memory default)]
+                        (if (->> node .item (instance? GrammarParser$IdContext) not)
+                          [default (->ListItem type (:value return)) value visitor]
+                          (let [ctx (.-context visitor)
+                                  {:keys [value type data-type pure-value]} (->> node .item .ID .getText (get-var ctx))]
+                            (if (= type :value)
+                              [default (->ListItem data-type value) pure-value visitor]
+                              [default (->ListItem data-type nil) nil visitor])))))]
+
+
       (-> (reduce (fn [[i visitor] node]
                     (let [id (-> node .ID .getText)
                           node (.expr node)
                           new-var-type (if (> (-> visitor .-context :value) 0) :reg :memory)
-                          [var-type value visitor] (if (is-item-expr node)
-                                                     (load-item visitor node new-var-type)
-                                                     [new-var-type nil (.visit visitor node)])
-                          [[name {:keys [value type]}] ctx] (create-var visitor id var-type value)
+                          [var-type {:keys [value type]} pure-value visitor] (if (is-item-expr node)
+                                                                               (load-item visitor node new-var-type)
+                                                                               (let [visitor (.visit visitor node)
+                                                                                     data-type (-> visitor .-context :return :type)]
+                                                                                 [new-var-type (->ListItem data-type nil) nil visitor]))
+                          [[name {:keys [value type]}] ctx] (create-var visitor id var-type value type pure-value)
                           ctx (add-scoped-var ctx name i)]
                       [(inc i) (case type
                                  :value (VisitorImpl. ctx)
@@ -351,15 +444,18 @@
 
   (visitDefn [visitor node]
     (let [ctx (-> visitor .-context)
-          name (-> node .ID .getFirst .getText)
+          name (-> node .ID .getText)
           label (generate-scope-name name "user_defined_function")
+          label-save (generate-scope-name name "user_defined_function_save_regs")
+          label-load (generate-scope-name name "user_defined_function_load_regs")
           ctx (create-scope ctx name label :invocation)
+          scope-name (-> ctx :scope first :name)
           [_ args ctx] (->> node
-                            .ID
-                            (drop 1)
-                            (reduce (fn [[i bindings ctx] id]
-                                      (let [name (.getText id)
-                                            [[_ {:keys [value]}] ctx] (create-var (VisitorImpl. ctx) name :memory nil)
+                            .arg
+                            (reduce (fn [[i bindings ctx] arg]
+                                      (let [name (-> arg .ID .getText)
+                                            type (->> arg .type .getType (get type-mapper))
+                                            [[_ {:keys [value]}] ctx] (create-var (VisitorImpl. ctx) name :memory nil type nil)
                                             ctx (add-scoped-var ctx name i)]
                                         [(inc i)
                                          (into bindings {i (->FunctionArg name value)})
@@ -368,18 +464,30 @@
           functions (:functions ctx)
           copy-ctx (-> ctx
                        (assoc :op [])
-                       (assoc :functions (assoc functions name (->Function name label [] args))))
+                       (assoc :functions (assoc functions name (->Function name label [] args label-save label-load scope-name))))
+          copy-ctx (-> copy-ctx
+                       (set-label label)
+                       VisitorImpl.
+                       (.visit block)
+                       .-context
+                       (append-asm (asm/jump return-label)))
+          used-regs (loop [next (:next-reg copy-ctx)
+                           r 6
+                           used []]
+                      (if (<= next r)
+                        used
+                        (recur next (inc r) (conj used r))))
+          [save-ops load-ops] (generate-save-and-load-regs label-save label-load args used-regs)
           fun-op (-> copy-ctx
-                     (set-label label)
-                     VisitorImpl.
-                     (.visit block)
-                     .-context
-                     (append-asm (asm/jump return-label))
-                     :op)
-          function (->Function name label fun-op args)]
+                     :op
+                     (into load-ops)
+                     (into save-ops))
+          function (->Function name label fun-op args label-save label-load scope-name)]
       (-> ctx
           VisitorImpl.
           drop-scope
+          (assoc :next-cell (:next-cell copy-ctx))
+          (assoc :strings-to-load (:strings-to-load copy-ctx))
           (assoc :functions (assoc functions name function))
           VisitorImpl.)))
 
@@ -397,13 +505,7 @@
                                (.visit visitor expr))]) [0 _] (.expr node)) second)))
 
   (visitIf [_ node]
-    (let [ctx (->> node
-                   .-cond
-                   (.visit _)
-                   .-context)
-          else-label (generate-scope-name "else" "if")
-          end-label (generate-scope-name "end" "if")
-          visit-branch (fn [ctx branch]
+    (let [visit-branch (fn [ctx branch]
                          (if (is-item-expr branch)
                            (-> ctx
                                (assoc :load-item true)
@@ -414,7 +516,12 @@
                            (-> ctx
                                VisitorImpl.
                                (.visit branch)
-                               .-context)))]
+                               .-context)))
+          ctx ( -> _
+                   .-context
+                   (visit-branch (-> node .cond)))
+          else-label (generate-scope-name "else" "if")
+          end-label (generate-scope-name "end" "if")]
       (-> ctx
           (jump-if-zero x22 else-label)
           (visit-branch (->> node .-if_branch))
@@ -427,24 +534,27 @@
   (visitExpr [_ node]
     (.visit _ (.getChild node 0)))
 
-  (visitProg [_ ctx]
-    (.visitChildren _ ctx))
+  (visitProg [_ node]
+    (.visitChildren _ node))
 
-  (visitTerminal [ctx _] ctx)
+  (visitTerminal [visitor _] visitor)
 
-  (visitErrorNode [ctx _] ctx)
+  (visitErrorNode [visitor _] visitor)
 
   (visitId [_ node]
-    (let [load-item (-> _ .-context :load-item)
+    (let [ctx (-> _ .-context)
+          load-item (-> ctx :load-item)
           var-name (->> node
                         .ID
-                        .getText)]
+                        .getText)
+          {:keys [data-type]} (get-var ctx var-name)]
       (-> (if load-item
             (-> _ .-context
                 (load-var var-name x22)
                 VisitorImpl.)
             _)
           (set-list-item var-name :var)
+          (set-return data-type var-name)
           VisitorImpl.)))
 
 
@@ -459,6 +569,7 @@
                 VisitorImpl.)
             _)
           (set-list-item int-val :int)
+          (set-return :int int-val)
           VisitorImpl.)))
 
   (visitNegativeInt [_ node]
@@ -474,12 +585,22 @@
                 VisitorImpl.)
             _)
           (set-list-item int-val :int)
+          (set-return :int int-val)
           VisitorImpl.)))
 
   (visitStr [_ node]
-    (let [str (->> node .getText)
-          str (-> str (subs 1 (-> str count dec)))]
-      (VisitorImpl. (set-list-item _ str :str))))
+    (let [load-item (-> _ .-context :load-item)
+          str (->> node .getText)
+          str (-> str (subs 1 (-> str count dec)))
+          [addr ctx] (-> _
+                         (set-list-item str :str)
+                         (add-string-on-load str))]
+      (-> (if load-item
+            (-> ctx
+                (append-asm (asm/li x22 addr)))
+            ctx)
+          (set-return :str addr)
+          VisitorImpl.)))
 
   (visitBool [_ node]
     (let [load-item (-> _ .-context :load-item)
@@ -491,6 +612,7 @@
                 VisitorImpl.)
             _)
           (set-list-item val :int)
+          (set-return :int val)
           VisitorImpl.)))
 
   (visitList [_ node]
@@ -500,7 +622,7 @@
                           (if (is-item-expr expr)
                             (let [visited (.visit ctx expr)
                                   list-item (-> visited get-list-item)]
-                              (when (and (not (contains? #{:print :str} symbol)) (= :str (:type list-item)))
+                              (when (and (not (contains? string-ops symbol)) (= :str (:type list-item)))
                                 (syntax-error visited expr))
                               (conj values list-item))
                             (conj values (->ListItem :expr expr)))) [] (.expr node))
@@ -542,6 +664,14 @@
           visit-comparison-operand (fn [ctx item]
                                      (let [[reg ctx] (next-reg ctx)]
                                        (case (:type item)
+                                         :str [reg (let [str-addr (get-string-addr ctx (:value item))
+                                                         [str-addr ctx] (if (nil? str-addr)
+                                                                          (add-string-on-load ctx (:value item))
+                                                                          [str-addr ctx])]
+                                                     (-> ctx
+                                                         (append-asm (asm/li reg str-addr))
+                                                         VisitorImpl.))]
+
                                          :int [reg (-> ctx
                                                        (append-asm (asm/li reg (:value item)))
                                                        VisitorImpl.)]
@@ -584,6 +714,7 @@
                                               VisitorImpl.)))))
 
           visit-logic-item (fn [ctx item]
+                             (println item)
                              (case (:type item)
                                :var (-> ctx .-context
                                         (load-var (:value item) nested-res-reg)
@@ -611,15 +742,77 @@
                                                 ctx ctx]
                                            (if (empty? ns)
                                              ctx
-                                             (recur (drop 1 ns)
-                                                    (first ns)
-                                                    (-> ctx
-                                                        (visit-logic-item item)
-                                                        (check-logic-item by end-label)))))
+                                             (let [ns (drop 1 ns)
+                                                   next (first ns)]
+                                               (recur ns next (-> ctx
+                                                                  (visit-logic-item item)
+                                                                  (check-logic-item by end-label))))))
 
                                          .-context
                                          (set-label end-label)
-                                         VisitorImpl.)))))]
+                                         VisitorImpl.)))))
+          process-string-list (fn [prepend]
+                                (let [items (if (nil? prepend)
+                                              items
+                                              (conj items (->ListItem :str prepend)))
+                                      visitor ctx
+                                      ctx (.-context visitor)
+                                      vars (string-vars-map ctx)
+                                      simplified (strings/simplify-str-sum items vars)
+                                      new-str [[(count simplified) nil]]
+                                      [str-map ctx] (->> simplified
+                                                         (filter #(-> % :type (= :str)))
+                                                         (map (fn [{:keys [value]}] value))
+                                                         (reduce (fn [[res ctx] item] (let [[addr ctx] (add-string-on-load ctx item)]
+                                                                                        [(assoc res item addr) ctx])) [{} ctx]))
+                                      [ctx new-str] (->> simplified
+                                                         (reduce (fn [[ctx new-str] {:keys [type data-type value]}]
+                                                                   (let [[addr ctx replaced] (case type
+                                                                                               :var (if (= data-type :int)
+                                                                                                      (let [[ctx addr] (-> ctx
+                                                                                                                           (load-var value x27)
+                                                                                                                           (allocate 4))
+                                                                                                            ctx (-> ctx
+                                                                                                                    (append-asm (asm/li x26 addr))
+                                                                                                                    append-sum-str-int)]
+                                                                                                        [addr ctx])
+                                                                                                      (let [{:keys [value pure-value]} (get-var ctx value)]
+                                                                                                        (if (nil? value)
+                                                                                                          [pure-value ctx]
+                                                                                                          [value ctx true])))
+                                                                                               :str [(get str-map value) ctx]
+                                                                                               :expr (let [visitor (-> ctx (assoc :load-item true) VisitorImpl. (.visit value))
+                                                                                                           ctx (-> visitor .-context (assoc :load-item false))
+                                                                                                           {:keys [type]} (:return ctx)]
+                                                                                                       (if (= type :int)
+                                                                                                         (let [[ctx addr] (-> ctx (allocate 4))
+                                                                                                               ctx (-> ctx
+                                                                                                                       (append-asm (asm/add x27 x0 x22))
+                                                                                                                       (append-asm (asm/li x26 addr))
+                                                                                                                       append-sum-str-int)]
+                                                                                                           [addr ctx])
+                                                                                                         (let [[ctx addr] (allocate ctx)]
+                                                                                                           [addr (-> ctx
+                                                                                                                     (append-asm (asm/sw x1 addr x22))) true]))))]
+                                                                     [ctx (conj new-str [(* -1 addr) replaced])])) [ctx new-str]))]
+                                  (let [size (-> new-str first first)
+                                        [ctx addr] (allocate ctx (inc size))
+                                        [_ ctx] (reduce (fn [[addr ctx] [item replaced]]
+                                                          [(dec addr) (-> (if replaced
+                                                                            (-> ctx
+                                                                                (append-asm (asm/lw x1 (* -1 item)))
+                                                                                (append-asm (asm/li x2 -1))
+                                                                                (append-asm (asm/mul x1 x1 x2)))
+                                                                            (append-asm ctx (asm/li x1 item)))
+                                                                          (append-asm (asm/sw x2 addr x1)))]) [addr ctx] new-str)]
+                                    [addr ctx])))
+
+          process-print (fn [[addr ctx]]
+                          (-> ctx
+                              (append-asm (asm/li x22 0))
+                              (append-asm (asm/li x25 addr))
+                              (invoke print-str-label)
+                              VisitorImpl.))]
 
       (case symbol
         :add (process-num-list items :add math/simplify-sum)
@@ -631,10 +824,20 @@
 
         :recur (let [visitor ctx
                      scopes (-> ctx .-context :scope)
-                     {:keys [label type]} (-> scopes first)]
+                     scope (-> scopes ((fn [scopes]
+                                         (loop [scope (first scopes)
+                                                scopes (drop 1 scopes)]
+                                           (if (not= (:type scope) :no-recursion)
+                                             scope
+                                             (if (empty? scopes)
+                                               {}
+                                               (recur (first scopes) (drop 1 scopes))))))))
+                     {:keys [label type]} scope]
                  (if (empty? scopes)
                    visitor
-                   (let [ctx (let [{:keys [_ vars _]} (first scopes)]
+                   (let [ctx (let [{:keys [vars]} scope]
+                               (when (not= (count vars) (-> node .expr .size))
+                                 (syntax-error visitor node))
                                (loop [i 0
                                       ctx (-> visitor .-context)]
                                  (if (>= i (count vars))
@@ -650,6 +853,7 @@
                                                          .-context
                                                          (assoc :load-item false))
                                                      (-> ctx VisitorImpl. (.visit expr) .-context))]
+
                                      (recur (inc i) (case type
                                                       :memory (-> processed
                                                                   (append-asm (asm/sw x1 value x22)))
@@ -666,7 +870,12 @@
 
         :id (let [visitor ctx
                   func-name (-> node .-symbol .getText)
-                  {:keys [args label]} (-> ctx .-context :functions (get func-name))
+                  {:keys [args label label-load label-save scope-name]} (-> visitor .-context :functions (get func-name))
+                  ctx (.-context visitor)
+                  ctx (if (= (-> ctx :scope first :name) scope-name)
+                        (-> ctx (invoke label-save))
+                        ctx)
+                  visitor (VisitorImpl. ctx)
                   count-args (count args)
                   visitor (loop [i 0
                                  visitor visitor]
@@ -674,30 +883,38 @@
                               visitor
                               (let [expr (.expr node i)
                                     {:keys [addr]} (get args i)
-                                    visitor (.visit visitor expr)
                                     ctx (.-context visitor)
-                                    ctx (let [{:keys [type value]} (-> visitor get-list-item)]
-                                          (if (is-item-expr expr)
-                                            (case type
-                                              :int (-> ctx (append-asm (asm/li x22 value)))
-                                              :var (let [var (-> ctx :vars (get value) :stack first)
-                                                         var-type (:type var)
-                                                         var-value (:value var)]
-                                                     (case var-type
-                                                       :memory (-> ctx
-                                                                   (append-asm (asm/lw x22 var-value)))
-                                                       :reg (-> ctx
-                                                                (append-asm (asm/add x22 x0 var-value)))
-                                                       :value (-> ctx
-                                                                  (append-asm (asm/addi x22 x0 var-value))))))
-                                            ctx))]
+                                    ctx (if (is-item-expr expr)
+                                          (-> ctx
+                                              (assoc :load-item true)
+                                              VisitorImpl.
+                                              (.visit expr)
+                                              .-context
+                                              (assoc :load-item false))
+                                          (-> ctx VisitorImpl. (.visit expr) .-context))]
                                 (recur (inc i) (-> ctx
                                                    (append-asm (asm/sw x1 addr x22))
                                                    VisitorImpl.)))))]
-              (-> visitor .-context
-                  (append-asm (asm/li x29 label))
-                  (append-asm (asm/jump invoke-label x28))
-                  VisitorImpl.)))))
+              (if (= (-> ctx :scope first :name) scope-name)
+                (-> visitor .-context
+                    (invoke label)
+                    (invoke label-load)
+                    VisitorImpl.)
+                (-> visitor .-context
+                    (invoke label)
+                    VisitorImpl.)))
+
+        :add-str (let [[addr ctx] (process-string-list nil)]
+                   (-> ctx
+                       (append-asm (asm/li x22 addr))
+                       VisitorImpl.))
+
+        :print (-> (process-string-list nil)
+                   (process-print))
+
+        :println (-> (process-string-list "\n")
+                     (process-print)))))
+
 
   (visitNot_list [_ node]
     (-> _
@@ -705,8 +922,7 @@
         .-context
         (jump-if-zero nested-res-reg 2)
         (set-nested-res-scalar 0)
-        (jump-if-zero zero-reg 2)
-        (jump-if-not-zero nested-res-reg 1)
+        (append-asm (asm/jump 1))
         (set-nested-res-scalar 1)
         VisitorImpl.)))
 
@@ -722,10 +938,19 @@
             (recur (inc i)))))))
 
 (defn sum-functions [functions]
-  (reduce (fn [acc [name {:keys [op]}]]
+  (reduce (fn [acc [_ {:keys [op]}]]
             (-> acc
                 (into op)
                 (conj "\n\n"))) [] functions))
+
+(defn sum-strings [in]
+  (reduce (fn [acc cur]
+            (let [{:keys [string start-cell]} cur]
+              (-> acc
+                  (into (strings/to-asm start-cell (-> string
+                                                       (str/replace #"\\n" "\n")
+                                                       (str/replace #"\\t" "\t"))))
+                  (conj "\n\n")))) [] in))
 
 (defn visit [^ParseTree tree]
   (let [ctx (-> (->Context nil
@@ -737,13 +962,17 @@
                            '()
                            '()
                            {}
-                           false)
+                           false
+                           nil
+                           [])
                 VisitorImpl.
                 (.visit tree)
                 .-context)
         functions (sum-functions (:functions ctx))
+        strings-loader (sum-strings (:strings-to-load ctx))
         op []; (generate-system v)
         ctx (assoc ctx :op (-> op
+                               (into strings-loader)
                                (into (:op ctx))
                                (conj "ebreak\n\n")
                                (into functions)))]

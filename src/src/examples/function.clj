@@ -1,7 +1,8 @@
-(defn func [a]
-  (if (not (= a 4))
-    (recur (+ a 1))
-    a))
+(defn func [^int a]
+  (let [var (not (= a 4))]
+    (if var
+      (recur (+ a 1))
+      a)))
 
 (let [a (func 1)
       b (+ a -3)]

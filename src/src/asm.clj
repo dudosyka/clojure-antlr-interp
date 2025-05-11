@@ -3,9 +3,14 @@
 (def x0 "x0")
 (def x1 "x1")
 (def x2 "x2")
+(def x3 "x3")
+(def x5 "x5")
 (def x20 "x20")
 (def x21 "x21")
 (def x22 "x22")
+(def x25 "x25")
+(def x26 "x26")
+(def x27 "x27")
 (def x28 "x28")
 (def x29 "x29")
 (def x31 "x31")
@@ -20,11 +25,15 @@
     [(li x1 addr)
      (str "lw " rd ", " x1 ", 0")]))
 
-(defn sw [buffer addr val]
-  (if (< addr (Math/pow 2 11))
-    (str "sw buffer, " addr ", " val)
-    [(li buffer addr)
-     (str "sw " buffer ", 0, " val)]))
+(defn lw-reg [rd r1]
+  (str "lw " rd ", " r1 ", 0"))
+
+(defn sw
+  ([dest-reg val-reg]
+   (str "sw " dest-reg ", 0, " val-reg))
+  ([buffer addr val]
+   [(li buffer addr)
+    (str "sw " buffer ", 0, " val)]))
 
 (defn slt [rd r1 r2]
   (str "slt " rd ", " r1 ", " r2))

@@ -11,7 +11,7 @@ item:   INT     # int
     |   ID      # id
     ;
 
-list:   '(' symbol=(RECUR|PRINT|ADD|ADDSTR|SUB|MUL|DIV|EQ|AND|OR|GR|GREQ|LESS|LESSEQ|ID) expr (NEWLINE? expr)* ')'
+list:   '(' symbol=(RECUR|PRINTLN|PRINT|ADD|ADDSTR|SUB|MUL|DIV|EQ|AND|OR|GR|GREQ|LESS|LESSEQ|ID) expr (NEWLINE? expr)* ')'
     ;
 
 not_list: '(' NOT expr ')'
@@ -30,7 +30,10 @@ loop: '(' LOOP '[' bindings ']' NEWLINE? block ')'
 if: '(' IF cond=expr NEWLINE? if_branch=expr NEWLINE? else_branch=expr ')'
   ;
 
-defn: '(' DEFN ID '[' ID* ']' NEWLINE? block ')'
+arg: type=(STR_TYPE|INT_TYPE|BOOL_TYPE) ID
+   ;
+
+defn: '(' DEFN ID '[' arg* ']' block ')'
     ;
 
 expr:   list
@@ -41,17 +44,18 @@ expr:   list
     |   item
     ;
 
-block: expr+;
+block: (NEWLINE? expr)+;
 
 //KEYWORD
-LOOP : 'loop' ;
-IF   :  'if'  ;
-LET  : 'let'  ;
-RECUR: 'recur';
-PRINT: 'print';
-DEFN : 'defn' ;
+LOOP   : 'loop'   ;
+IF     :  'if'    ;
+LET    : 'let'    ;
+RECUR  : 'recur'  ;
+PRINT  : 'print'  ;
+PRINTLN: 'println';
+DEFN   : 'defn'   ;
 
-// OPERATORS
+
 MUL :   '*'   ;
 DIV :   '/'   ;
 ADD :   '+'   ;
@@ -66,10 +70,15 @@ AND :   'and' ;
 OR  :   'or'  ;
 NOT :   'not' ;
 
-// DATA TYPES
+
 INT :   [0-9]+ ;
 BOOL:   'true'|'false';
 STR :   '"' (~'"' | '\\' '"')* '"' ;
+
+
+STR_TYPE:  '^str' ;
+INT_TYPE:  '^int' ;
+BOOL_TYPE: '^bool';
 
 ID  :   [a-zA-Z_-]+ ;
 NEWLINE:'\r'? '\n' ;

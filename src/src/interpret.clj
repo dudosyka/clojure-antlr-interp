@@ -21,6 +21,31 @@
           asm (->> ctx :op (str/join "\n"))]
       (println asm))))
 
+;(let [a "abc"
+;      b "def"
+;      c 5
+;      d (+ c 1)]
+;  (custom-println (str "1234"
+;                       c
+;                       d
+;                       b
+;                       a
+;                       (let [a "hehe"
+;                             a "hehehe"]
+;                         a)
+;                       a
+;                       (if (= a "abc")
+;                         "hehe"
+;                         "not-hehe")))
+;  (custom-println "line")
+;  (custom-println "new line"))
+; (defn custom-println [^str string]
+;  (print "\n" "\t" string "\n"))
+;
+;
+;(custom-println "test")
+;(custom-println "test")
+
 (-main ["/Users/dudosyka/IdeaProjects/compilers/src/src/examples/list.clj"])
 ;(-main ["/Users/dudosyka/IdeaProjects/compilers/src/src/examples/fib.clj"])
 ;(-main ["/Users/dudosyka/IdeaProjects/compilers/src/src/examples/loop.clj"])
