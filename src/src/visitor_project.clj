@@ -5,7 +5,8 @@
             [logic]
             [asm]
             [asm :refer [x0 x1 x2 x3 x5 x20 x21 x22 x25 x26 x27 x28 x29 x31]]
-            [strings])
+            [strings]
+            [errors])
   (:import (com.grammar GrammarParser GrammarParser$IdContext GrammarVisitor)
            (org.antlr.runtime.tree ParseTree)))
 
@@ -284,9 +285,6 @@
 (defn generate-scope-name [prefix suffix]
   (str (str/replace prefix #"-" "_") "_" (long (rand 10000)) (System/currentTimeMillis) (long (rand 10000)) "_" suffix))
 
-(defn syntax-error [visitor node]
-  (throw (Exception. (str "Bad operand type " (str visitor) " " (str node)))))
-
 (defn set-return [ctx type value]
   (assoc ctx :return (->Return type value)))
 
@@ -527,7 +525,10 @@
           (visit-branch (->> node .-if_branch))
           (append-asm (asm/jump end-label))
           (set-label else-label)
-          (visit-branch (->> node .-else_branch))
+          ((fn [ctx]
+             (if (->> node .-else_branch nil?)
+               ctx
+               (visit-branch ctx (->> node .-else_branch)))))
           (set-label end-label)
           VisitorImpl.)))
 
@@ -623,7 +624,7 @@
                             (let [visited (.visit ctx expr)
                                   list-item (-> visited get-list-item)]
                               (when (and (not (contains? string-ops symbol)) (= :str (:type list-item)))
-                                (syntax-error visited expr))
+                                (errors/syntax visited expr))
                               (conj values list-item))
                             (conj values (->ListItem :expr expr)))) [] (.expr node))
           vars (get-vars-map (-> ctx .-context))
@@ -714,7 +715,6 @@
                                               VisitorImpl.)))))
 
           visit-logic-item (fn [ctx item]
-                             (println item)
                              (case (:type item)
                                :var (-> ctx .-context
                                         (load-var (:value item) nested-res-reg)
@@ -837,7 +837,7 @@
                    visitor
                    (let [ctx (let [{:keys [vars]} scope]
                                (when (not= (count vars) (-> node .expr .size))
-                                 (syntax-error visitor node))
+                                 (errors/syntax visitor node))
                                (loop [i 0
                                       ctx (-> visitor .-context)]
                                  (if (>= i (count vars))
@@ -970,11 +970,16 @@
                 .-context)
         functions (sum-functions (:functions ctx))
         strings-loader (sum-strings (:strings-to-load ctx))
-        op []; (generate-system v)
+        op ["# Load recursion regs"
+            (asm/li x31 memory-size)
+            (asm/li x5 (:next-cell ctx))
+            "\n\n"
+            "# Load string literals"]; (generate-system v)
         ctx (assoc ctx :op (-> op
                                (into strings-loader)
+                               (into ["# Program start"])
                                (into (:op ctx))
-                               (conj "ebreak\n\n")
+                               (conj "ebreak\n\n# Function declarations")
                                (into functions)))]
     ctx))
 

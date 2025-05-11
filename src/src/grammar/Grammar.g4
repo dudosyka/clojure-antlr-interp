@@ -27,7 +27,7 @@ let: '(' LET '[' bindings ']' NEWLINE? block ')'
 loop: '(' LOOP '[' bindings ']' NEWLINE? block ')'
     ;
 
-if: '(' IF cond=expr NEWLINE? if_branch=expr NEWLINE? else_branch=expr ')'
+if: '(' IF cond=expr NEWLINE? if_branch=expr NEWLINE? else_branch=expr? ')'
   ;
 
 arg: type=(STR_TYPE|INT_TYPE|BOOL_TYPE) ID
