@@ -655,13 +655,14 @@
             (asm/li x31 memory-size)
             (asm/li x5 (:next-cell ctx))
             "\n\n"
-            "# Load string literals"]; (generate-system v)
+            "# Load string literals"]
         ctx (assoc ctx :op (-> op
                                (into strings-loader)
                                (into ["# Program start"])
                                (into (:op ctx))
                                (conj "ebreak\n\n# Function declarations")
-                               (into functions)))]
+                               (into functions)
+                               (into)))]
     ctx))
 
 

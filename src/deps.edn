@@ -1,2 +1,5 @@
-{:deps {grammar/grammar {:local/root "./src/grammar/Grammar.jar"}
-        antlr/antlr {:local/root "./src/grammar/antlr.jar"}}}
+{:deps {org.clojure/clojure {:mvn/version "1.12.0"}
+
+        grammar/grammar {:local/root "./src/grammar/Grammar.jar"}
+        antlr/antlr {:local/root "./src/grammar/antlr.jar"}}
+ :paths ["src" "classes"]}
