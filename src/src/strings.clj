@@ -15,7 +15,7 @@
   (and (= type :int) (not= value nil)))
 
 (defn- can-simplify? [type]
-  (= type :str))
+  (or (= type :str) (= type :int)))
 
 (defn- try-var-simplify [item var-map]
   (if (and (is-var? item) (-> var-map (get (:value item)) nil? not))

@@ -44,7 +44,7 @@ expr:   list
     |   item
     ;
 
-block: (NEWLINE? expr)+;
+block: NEWLINE? expr (NEWLINE|expr)*;
 
 //KEYWORD
 LOOP   : 'loop'   ;
@@ -83,5 +83,6 @@ BOOL_TYPE: '^bool';
 ID  :   [a-zA-Z_-]+ ;
 NEWLINE:'\r'? '\n' ;
 WS  :   [ \t]+ -> skip ;
-SINGLE_LINE_COMMENT: ';' ~[\r\n]* -> skip ;
-MULTI_LINE_COMMENT: '/*' .*? '*/' -> skip ;
+SINGLE_COMMENT: ';' ~[\r\n]* -> skip;
+MULTI_COMMENT:  '/*' .*? '*/' -> skip;
+

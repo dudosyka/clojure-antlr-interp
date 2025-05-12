@@ -92,10 +92,12 @@ calc_int_length:
   sw x26, 0, x1
   #calc end char pointer
   sub x26, x26, x1
+  li x3, 0
 pack_int:
   li x1, 1000
   rem x1, x27, x1
-  bne x1, x0, 1
+  bne x1, x0, 2
+  beq x3, x0, 1
   jal x1, return
   sub x27, x27, x1
   li x2, 1000

@@ -1,9 +1,9 @@
 (let [a 10
       b "123"
       c true]
-  (print "Преобразование типов в строку:" (str a b c))
+  (println "Convert types to string:" (str a b c))
   (let [b (+ a 2 (* 3 4) (- 1 2) (/ 4 2))]
     (if c
-      (print "Новое значение b после перекрытия скоупа:" b)
-      (print a)))
-  (print "После того как вложенный скоуп выполнился старое значение b снова появилось:" b))
+      (println "New b value after scope overlap:" b)
+      (println a)))
+  (println "After exit overlapping scope old b value return back:" b))

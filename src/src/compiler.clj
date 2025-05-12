@@ -1,4 +1,4 @@
-(ns interpret
+(ns compiler
   (:gen-class)
   (:require [clojure.string :as str]
             [visitor]
@@ -9,7 +9,7 @@
            (errors ErrorListener)
            (org.antlr.v4.runtime ANTLRInputStream CommonTokenStream)))
 
-(defn -main [input-file]
+(defn -main [input-file output-file]
   (swap! errors/got-errors errors/clear)
   (let [parser-error-listener (ErrorListener.)
         lexer-error-listener (ErrorListener.)
@@ -26,9 +26,10 @@
         _ (.addErrorListener lexer lexer-error-listener)
         tree (.prog parser)]
     (when @errors/got-errors
-      (throw (Exception. "Compilation failed! Syntax errors found")))
+      (throw (Exception. "Compilation failed! Errors found")))
     (let [ctx (visitor-asm/visit tree)
           asm (->> ctx :op (str/join "\n"))]
-      (println asm))))
+      (spit output-file asm))))
 
-(-main "/Users/dudosyka/IdeaProjects/compilers/src/src/examples/comments.clj")
+;(-main "/Users/dudosyka/IdeaProjects/compilers/src/src/examples/string_test.clj" "/Users/dudosyka/IdeaProjects/compilers/src/out.asm")
+(-main "/Users/dudosyka/IdeaProjects/compilers/src/src/examples/overview/defn.clj" "/Users/dudosyka/IdeaProjects/compilers/src/out.asm")

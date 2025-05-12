@@ -77,7 +77,8 @@
                         (if (->> node .item (instance? GrammarParser$IdContext) not)
                           [default (->ListItem type (:value return)) value visitor]
                           (let [ctx (.-context visitor)
-                                  {:keys [value type data-type pure-value]} (->> node .item .ID .getText (vars/get-var ctx (.item node)))]
+                                var-name (-> node .item .ID .getText)
+                                {:keys [value type data-type pure-value]} (vars/get-var ctx var-name (.item node))]
                             (if (= type :value)
                               [default (->ListItem data-type value) pure-value visitor]
                               [default (->ListItem data-type nil) nil visitor])))))]
@@ -316,9 +317,12 @@
           items (reduce (fn [values expr]
                           (if (is-item-expr expr)
                             (let [visited (.visit ctx expr)
-                                  list-item (-> visited get-list-item)]
-                              (when (and (not (contains? op/string-ops symbol)) (= :str (:type list-item)))
-                                (errors/bad-type-for-std-function expr symbol (:type list-item) [:int :bool]))
+                                  list-item (-> visited get-list-item)
+                                  type (if (= (:type list-item) :var)
+                                         (-> ctx .-context (vars/get-var (:value list-item) expr) :data-type)
+                                         (:type list-item))]
+                              (when (and (not (contains? op/string-ops symbol)) (= :str type))
+                                (errors/bad-type-for-std-function expr symbol type [:int :bool]))
                               (conj values list-item))
                             (conj values (->ListItem :expr expr)))) [] (.expr node))
           vars (vars/get-vars-map (-> ctx .-context))
@@ -366,14 +370,13 @@
                                                      (-> ctx
                                                          (asm/append-asm (asm/li reg str-addr))
                                                          VisitorImpl.))]
-
                                          :int [reg (-> ctx
                                                        (asm/append-asm (asm/li reg (:value item)))
                                                        VisitorImpl.)]
                                          :var [reg (-> ctx
                                                        (vars/load-var (:value item) reg node)
                                                        VisitorImpl.)]
-                                         :expr (let [ctx (-> ctx (.visit (:value item)) .-context)
+                                         :expr (let [ctx (-> ctx VisitorImpl. (.visit (:value item)) .-context)
                                                      [reg ctx] (-> ctx VisitorImpl. scope/next-reg)
                                                      ctx (-> ctx
                                                              (asm/copy-reg-to nested-res-reg reg)
@@ -445,10 +448,15 @@
                                          .-context
                                          (asm/set-label end-label)
                                          VisitorImpl.)))))
-          process-string-list (fn [prepend]
+          process-string-list (fn [prepend separator]
                                 (let [items (if (nil? prepend)
                                               items
                                               (conj items (->ListItem :str prepend)))
+                                      items (if (nil? separator)
+                                              items
+                                              (->> items
+                                                   (interpose (->ListItem :str separator))
+                                                   vec))
                                       visitor ctx
                                       ctx (.-context visitor)
                                       vars (vars/string-vars-map ctx)
@@ -488,15 +496,21 @@
                                                                                                          (let [[ctx addr] (vars/allocate ctx)]
                                                                                                            [addr (-> ctx
                                                                                                                      (asm/append-asm (asm/sw x1 addr x22))) true]))))]
-                                                                     [ctx (conj new-str [(* -1 addr) replaced])])) [ctx new-str]))]
+                                                                     [ctx (conj new-str (if (str/includes? (str addr) "x")
+                                                                                          [addr replaced true]
+                                                                                          [(* -1 addr) replaced false]) )])) [ctx new-str]))]
                                   (let [size (-> new-str first first)
                                         [ctx addr] (vars/allocate ctx (inc size))
-                                        [_ ctx] (reduce (fn [[addr ctx] [item replaced]]
+                                        [_ ctx] (reduce (fn [[addr ctx] [item replaced store-in-reg]]
                                                           [(dec addr) (-> (if replaced
-                                                                            (-> ctx
-                                                                                (asm/append-asm (asm/lw x1 (* -1 item)))
-                                                                                (asm/append-asm (asm/li x2 -1))
-                                                                                (asm/append-asm (asm/mul x1 x1 x2)))
+                                                                            (if store-in-reg
+                                                                              (-> ctx
+                                                                                  (asm/append-asm (asm/li x2 -1))
+                                                                                  (asm/append-asm (asm/mul x1 item x2)))
+                                                                              (-> ctx
+                                                                                  (asm/append-asm (asm/lw x1 (* -1 item)))
+                                                                                  (asm/append-asm (asm/li x2 -1))
+                                                                                  (asm/append-asm (asm/mul x1 x1 x2))))
                                                                             (asm/append-asm ctx (asm/li x1 item)))
                                                                           (asm/append-asm (asm/sw x2 addr x1)))]) [addr ctx] new-str)]
                                     [addr ctx])))
@@ -509,12 +523,30 @@
                               VisitorImpl.))]
 
       (case symbol
-        :add (process-num-list items :add math/simplify-sum)
-        :sub (process-num-list items :sub math/simplify-sub)
-        :mul (process-num-list items :mul math/simplify-multiplication)
-        :div (process-num-list items :div math/simplify-division)
-        (:eq :gr :gr-eq :less :less-eq) (process-comparison-list items symbol)
-        (:and :or) (process-logic-list items symbol)
+        :add (-> (process-num-list items :add math/simplify-sum)
+                 .-context
+                 (set-return :int nil)
+                 VisitorImpl.)
+        :sub (-> (process-num-list items :sub math/simplify-sub)
+                 .-context
+                 (set-return :int nil)
+                 VisitorImpl.)
+        :mul (-> (process-num-list items :mul math/simplify-multiplication)
+                 .-context
+                 (set-return :int nil)
+                 VisitorImpl.)
+        :div (-> (process-num-list items :div math/simplify-division)
+                 .-context
+                 (set-return :int nil)
+                 VisitorImpl.)
+        (:eq :gr :gr-eq :less :less-eq) (-> (process-comparison-list items symbol)
+                                            .-context
+                                            (set-return :int nil)
+                                            VisitorImpl.)
+        (:and :or) (-> (process-logic-list items symbol)
+                       .-context
+                       (set-return :int nil)
+                       VisitorImpl.)
 
         :recur (let [visitor ctx
                      scopes (-> ctx .-context :scope)
@@ -529,30 +561,41 @@
                      {:keys [label type]} scope]
                  (if (or (empty? scopes) (nil? label))
                    (errors/unknown-id node "recur")
-                   (let [ctx (let [{:keys [vars]} scope]
-                               (when (not= (count vars) (-> node .expr .size))
-                                 (errors/bad-arguments-count node "recur" (count vars) (-> node .expr .size)))
-                               (loop [i 0
-                                      ctx (-> visitor .-context)]
-                                 (if (>= i (count vars))
-                                   ctx
-                                   (let [expr (-> node (.expr i))
-                                         var (get vars i)
-                                         {:keys [type value]} (-> ctx :vars (get var) :stack first)
-                                         processed (if (is-item-expr expr)
-                                                     (-> ctx
-                                                         (assoc :load-item true)
-                                                         VisitorImpl.
-                                                         (.visit expr)
-                                                         .-context
-                                                         (assoc :load-item false))
-                                                     (-> ctx VisitorImpl. (.visit expr) .-context))]
+                   (let [[replacements ctx] (let [{:keys [vars]} scope]
+                                              (when (not= (count vars) (-> node .expr .size))
+                                                (errors/bad-arguments-count node "recur" (count vars) (-> node .expr .size)))
+                                              (loop [i 0
+                                                     ctx (-> visitor .-context)
+                                                     replacements []]
+                                                (if (>= i (count vars))
+                                                  [replacements ctx]
+                                                  (let [expr (-> node (.expr i))
+                                                        var (get vars i)
+                                                        {:keys [type value]} (-> ctx :vars (get var) :stack first)
+                                                        [ctx intermediate-result-cell] (vars/allocate ctx 1)
+                                                        replacement [type intermediate-result-cell value]
+                                                        processed (if (is-item-expr expr)
+                                                                    (-> ctx
+                                                                        (assoc :load-item true)
+                                                                        VisitorImpl.
+                                                                        (.visit expr)
+                                                                        .-context
+                                                                        (assoc :load-item false))
+                                                                    (-> ctx VisitorImpl. (.visit expr) .-context))]
 
-                                     (recur (inc i) (case type
-                                                      :memory (-> processed
-                                                                  (asm/append-asm (asm/sw x1 value x22)))
-                                                      :reg (-> processed
-                                                               (asm/append-asm (asm/add value x0 x22)))))))))]
+                                                    (recur (inc i)
+                                                           (asm/append-asm processed (asm/sw x1 intermediate-result-cell x22))
+                                                           (conj replacements replacement))))))
+                         ctx (loop [replacements replacements
+                                    ctx ctx]
+                               (if (empty? replacements)
+                                 ctx
+                                 (let [[type from to] (first replacements)
+                                       ctx (asm/append-asm ctx (asm/lw x22 from))]
+                                   (recur (drop 1 replacements) (case type
+                                                                  :memory (asm/append-asm ctx (asm/sw x1 to x22))
+
+                                                                  :reg (asm/append-asm ctx (asm/add to x0 x22)))))))]
                      (case type
                        :no-recursion visitor
                        :invocation (-> ctx
@@ -605,15 +648,16 @@
                     (asm/invoke label)
                     VisitorImpl.)))
 
-        :add-str (let [[addr ctx] (process-string-list nil)]
+        :add-str (let [[addr ctx] (process-string-list nil nil)]
                    (-> ctx
                        (asm/append-asm (asm/li x22 addr))
+                       (set-return :str addr)
                        VisitorImpl.))
 
-        :print (-> (process-string-list nil)
+        :print (-> (process-string-list nil " ")
                    (process-print))
 
-        :println (-> (process-string-list "\n")
+        :println (-> (process-string-list "\n" " ")
                      (process-print)))))
 
 
