@@ -30,6 +30,3 @@
     (let [ctx (visitor-asm/visit tree)
           asm (->> ctx :op (str/join "\n"))]
       (spit output-file asm))))
-
-;(-main "/Users/dudosyka/IdeaProjects/compilers/src/src/examples/string_test.clj" "/Users/dudosyka/IdeaProjects/compilers/src/out.asm")
-(-main "/Users/dudosyka/IdeaProjects/compilers/src/src/examples/overview/defn.clj" "/Users/dudosyka/IdeaProjects/compilers/src/out.asm")
